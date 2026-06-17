@@ -16,7 +16,7 @@ import {
   type StreamSelectElement,
 } from './livegraph-data-listener.js';
 import { numberWidget, selectDropdown, btnPopup, waveformIconBar, type NumberWidget, type WaveformIconBar } from './widgets.js';
-import { downloadCSV } from './export.js';
+import { downloadCSV, snapshotPNG } from './export.js';
 import { TypedEvent } from './dataserver.js';
 import { readVBUS } from './m1k-power.js';
 
@@ -874,8 +874,8 @@ export function setupToolbar(): void {
     (server.device as CEEDevice).configure({ sampleTime: rate });
   });
 
-  // Export CSV
-  document.getElementById('download-btn')?.addEventListener('click', () => {
+  // Export popup: CSV download or PNG snapshot of a chosen graph
+  const exportCSV = (): void => {
     const dev = server.device as CEEDevice;
     dev.pauseCapture();
     const len = timeseries.doneSamples;
@@ -909,6 +909,46 @@ export function setupToolbar(): void {
       });
 
       downloadCSV(cols);
+    });
+  };
+
+  const exportBtn = document.getElementById('download-btn');
+  const exportPopup = document.getElementById('export-popup');
+  const pngGraphSel = document.getElementById('export-png-graph') as HTMLSelectElement | null;
+  let hideExport: (() => void) | null = null;
+  if (exportBtn && exportPopup && pngGraphSel) {
+    hideExport = btnPopup(exportBtn, exportPopup, () => {
+      // Populate the PNG graph picker with the current timeseries graphs.
+      pngGraphSel.innerHTML = '';
+      timeseries.graphs.forEach((g, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `${g.stream.displayName} (${g.stream.units})`;
+        pngGraphSel.appendChild(opt);
+      });
+    });
+  }
+
+  document.getElementById('export-csv')?.addEventListener('click', () => {
+    hideExport?.();
+    exportCSV();
+  });
+
+  document.getElementById('export-png')?.addEventListener('click', () => {
+    const idx = parseInt(pngGraphSel?.value ?? '0', 10);
+    const g = timeseries.graphs[idx];
+    if (!g) return;
+    const label = (document.getElementById('export-png-label') as HTMLInputElement | null)?.value.trim();
+    hideExport?.();
+    // Re-render synchronously so the WebGL trace buffer is populated when
+    // snapshotPNG reads it back (it has no preserveDrawingBuffer).
+    g.drawSync();
+    // Back-to-front: axes/grid, then trace (graphCanvas), then phosphor overlay.
+    const layers = [g.axisCanvas, g.graphCanvas];
+    if (g.phosphor) layers.push(g.phosphor.canvas);
+    snapshotPNG(layers, {
+      title: `${g.stream.displayName} (${g.stream.units})`,
+      label: label || undefined,
     });
   });
 

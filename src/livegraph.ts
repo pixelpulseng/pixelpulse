@@ -612,6 +612,13 @@ export class GraphCanvas {
     }
   }
 
+  // Force a synchronous redraw. Needed before reading back the WebGL trace
+  // canvas (created without preserveDrawingBuffer): drawImage() only sees the
+  // framebuffer in the same task that rendered it.
+  drawSync(): void {
+    this.redraw();
+  }
+
   private redraw = (): void => {
     const startTime = performance.now();
 

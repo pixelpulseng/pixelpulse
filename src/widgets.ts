@@ -146,10 +146,13 @@ export function waveformIconBar(
   return { el, select };
 }
 
+// Returns a function that hides the popup, so callers can close it from a
+// control inside the popup (clicks inside don't reach the outside-click
+// dismissal because the popup stops their propagation).
 export function btnPopup(
   button: HTMLElement, popup: HTMLElement,
   opencb: () => void, closecb?: () => void,
-): void {
+): () => void {
   let state = false;
 
   function hidePopup() {
@@ -180,4 +183,6 @@ export function btnPopup(
   popup.addEventListener('click', (e) => {
     e.stopPropagation();
   });
+
+  return hidePopup;
 }
