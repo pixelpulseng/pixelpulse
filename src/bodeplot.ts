@@ -41,11 +41,17 @@ function vMul(inArray: Float32Array, outArray: Float32Array, fac: number): void 
   }
 }
 
+// skewSamples: sample-time skew of fft1's stream minus fft2's stream. The
+// transfer function H = fft1/fft2 inherits a linear phase -2*pi*k*skew/N from
+// any acquisition-time offset between the two channels; we rotate it back out
+// so a flat (resistive) network reads ~0 phase. See Listener.streamSampleOffset
+// for where the M1K's 0.5-sample chA/chB skew comes from.
 function fftMagPhase(
   fft1: FFT,
   fft2: FFT,
   outMag: Float32Array,
   outPhase: Float32Array,
+  skewSamples = 0,
 ): void {
   const r1a = fft1.real;
   const i1a = fft1.imag;
@@ -54,9 +60,18 @@ function fftMagPhase(
 
   const log = Math.log;
   const atan2 = Math.atan2;
+  const cos = Math.cos;
+  const sin = Math.sin;
 
   const magScale = 10 / Math.LN10; // avoid square root, so an extra power of 2
   const phaseScale = 180 / Math.PI;
+
+  // Per-bin phase rotation that undoes the inter-channel sample skew. The
+  // pipeline FFTs the first difference (vDiff) of each channel before the
+  // ratio, which flips the effective sign of a raw sample lag; the negative
+  // sign here was confirmed empirically against hardware (libsmu/
+  // measure_phase.py: skew=-0.40 flattens, +0.40 doubles the ramp).
+  const phasePerBin = (-2 * Math.PI * skewSamples) / fft1.bufferSize;
 
   for (let x = 0; x < fft1.bufferSize / 2; x++) {
     const r1 = r1a[x];
@@ -65,8 +80,16 @@ function fftMagPhase(
     const i2 = i2a[x];
     // Complex number division
     const d = r2 * r2 + i2 * i2;
-    const r = (r1 * r2 + i1 * i2) / d;
-    const im = (r2 * i1 - r1 * i2) / d;
+    let r = (r1 * r2 + i1 * i2) / d;
+    let im = (r2 * i1 - r1 * i2) / d;
+    if (skewSamples !== 0) {
+      // Multiply H by exp(j * phasePerBin * x) to remove the linear phase.
+      const c = cos(phasePerBin * x);
+      const s = sin(phasePerBin * x);
+      const rr = r * c - im * s;
+      im = r * s + im * c;
+      r = rr;
+    }
     outMag[x] = log(r * r + im * im) * magScale;
     outPhase[x] = atan2(im, r) * phaseScale;
   }
@@ -125,7 +148,7 @@ class App {
   listener: DataListener | null;
   pendingStart: boolean;
   sweepCount: number;
-  tdata!: number[];
+  tdata!: Float32Array;
   fdata!: Float32Array;
 
   constructor() {
@@ -295,7 +318,13 @@ class App {
 
     this.time_axis.min = -sampleScale * stepTimeRatio * sampleTime;
     this.time_axis.max = sampleScale * (1 - stepTimeRatio) * sampleTime;
-    this.tdata = arange(this.time_axis.min, this.time_axis.max, this.device.sampleTime);
+    // arange() returns a plain number[], but the GL buffer needs a Float32Array
+    // (a number[] silently produces a zero-length buffer). It also includes the
+    // endpoint, yielding sampleScale + 1 points, so trim x to match the
+    // sampleScale-long y buffers.
+    this.tdata = Float32Array.from(
+      arange(this.time_axis.min, this.time_axis.max, this.device.sampleTime),
+    ).subarray(0, sampleScale);
 
     this.time_axis.visibleMin = this.time_axis.min * 0.1;
     this.time_axis.visibleMax = this.time_axis.max * 0.3;
@@ -305,9 +334,9 @@ class App {
     for (let i = 0; i < sampleScale / 2; i++) {
       this.fdata[i] = Math.max(0, Math.log(i / sampleTime / sampleScale)) / Math.LN10;
     }
-    this.freq_axis.visibleMax = this.freq_axis.max = Math.min(
-      this.fdata[this.fdata.length - 1], 4,
-    );
+    // fdata holds log10(frequency); its last entry is the Nyquist frequency
+    // (~40 kHz at 80 ksps). Show the full range rather than clamping at 10^4 Hz.
+    this.freq_axis.visibleMax = this.freq_axis.max = this.fdata[this.fdata.length - 1];
 
     const initSignal = (s: SignalState): void => {
       s.step_series.xdata = this.tdata;
@@ -397,10 +426,15 @@ class App {
     processSignal(this.sense, data2);
 
     if (updateUI) {
+      // fft1 = sense, fft2 = source, so H = sense/source; pass the sense-minus-
+      // source acquisition skew so the inter-channel offset is rotated out.
+      const skew = listener.streamSampleOffset(this.sense.stream!)
+        - listener.streamSampleOffset(this.source.stream!);
       fftMagPhase(
         this.sense.fft!, this.source.fft!,
         this.mag_series.ydata as Float32Array,
         this.phase_series.ydata as Float32Array,
+        skew,
       );
 
       this.step_plot.needsRedraw();
@@ -449,8 +483,10 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     updateDevsMenu: (l) => {
-      const switchDev = getEl('switchDev');
-      switchDev.style.display = l.length > 1 ? '' : 'none';
+      const switchDev = document.getElementById('switchDev');
+      if (switchDev) {
+        switchDev.style.display = l.length > 1 ? '' : 'none';
+      }
     },
 
     initDevice: (dev) => {

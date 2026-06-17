@@ -774,7 +774,9 @@ export class GraphCanvas {
       gl.bindBuffer(gl.ARRAY_BUFFER, yBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, series.ydata as Float32Array, gl.STREAM_DRAW);
       gl.vertexAttribPointer(shaderProgram.attrib.y, 1, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.LINE_STRIP, 0, series.xdata.length);
+      // Never request more vertices than the smaller buffer holds, or the whole
+      // draw call is rejected (GL_INVALID_OPERATION) and nothing renders.
+      gl.drawArrays(gl.LINE_STRIP, 0, Math.min(series.xdata.length, series.ydata.length));
     }
   }
 }

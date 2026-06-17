@@ -47,6 +47,7 @@ tr.suspect td { background: #fff3cd; }
       <h2>1. Setup</h2>
       <p>Requires: a DMM (one voltage reading) and one precision resistor (2.5–100 Ω, value known to 1% or better).</p>
       <div class="warn">Close other pixelpulse tabs during calibration — they will fight over the device. The device's stored calibration is reset at the start of this procedure.</div>
+    <p class="note">Any step can be re-run (↻) — e.g. after fixing a loose resistor connection — and replaces that step's captured points. Re-running step 2 (measure-V) invalidates the later steps; repeat those too.</p>
       <p>
         <label>Measured 2.5 V rail (DMM, at the "2.5 V" pin): <input type="number" id="inp-rail" value="2.5000" step="0.0001" min="2" max="3"> V</label>
         <label>External resistor: <input type="number" id="inp-rext" value="25.0" step="0.01" min="2.5" max="100"> Ω</label>

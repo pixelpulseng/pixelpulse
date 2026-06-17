@@ -19,6 +19,14 @@ import { TypedEvent } from './smu/index.js';
 
 export { TypedEvent };
 
+// chA->chB acquisition skew on the M1K: chB's ADC converts one TC2 tick after
+// chA, so chB voltage lags chA by a fixed TIME, independent of sample rate.
+// Measured as the b.v-vs-a.v phase slope into a resistive loopback
+// (libsmu/measure_phase.py, FW 2.18 HW D): +0.40 sample at 80 ksps and +0.50
+// at 100 ksps -- both 5.0 us, i.e. one tick. Expressed as a time so the
+// per-sample offset stays correct at any rate.
+const M1K_CHB_SKEW_SECONDS = 5.0e-6;
+
 export type Reply = Record<string, unknown>;
 export type Callback = (data: Reply) => void;
 
@@ -519,6 +527,28 @@ export class Listener {
 
   streamIndex(stream: Stream): number {
     return this.streams.indexOf(stream);
+  }
+
+  // Per-stream acquisition-time offset, in units of this listener's samples,
+  // relative to the nominal sample grid. The host packs each interleaved
+  // 4-word M1K slot ([V_A, V_B, I_A, I_B]) under a single timestamp, but the
+  // hardware converts channel B after channel A, so chB's samples are
+  // physically delayed relative to chA and a chA-vs-chB ratio accrues
+  // 360*offset*f/fs degrees of spurious phase. Bench (passive V vs V, both
+  // channels read) measured +0.502 sample drive-independent on FW 2.18, HW D
+  // (libsmu/measure_phase.py). TODO: tune against hardware here — the live
+  // bode ratio also includes the DAC->ADC output-path skew, so the effective
+  // value can differ from the pure input-side 0.5. Other devices (CEE) sample
+  // both channels together: offset 0.
+  streamSampleOffset(stream: Stream): number {
+    if (this.device.model === 'com.analogdevices.m1k') {
+      // Channel id is lowercase "a"/"b" (see connect m1k.cpp channel_a("a","A")).
+      if (stream.parent.id.toLowerCase() === 'b') {
+        return M1K_CHB_SKEW_SECONDS / (this.sampleTime || this.device.sampleTime);
+      }
+      return 0;
+    }
+    return 0;
   }
 
   configure(startTime: number | false | null = null, requestedSampleTime = 0.1, count = -1): void {

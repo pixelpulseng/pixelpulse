@@ -131,8 +131,14 @@ export class USBDataserver extends Dataserver {
     this.devicesChanged.notify(this.devices);
   }
 
+  // Commands run strictly in submission order, as they did over the Connect
+  // WebSocket: callers issue sequences like configure-then-startCapture
+  // without awaiting, which must not interleave. dispatch() never rejects
+  // (errors are reported through the reply callback), so the chain is safe.
+  private commandQueue: Promise<void> = Promise.resolve();
+
   send(cmd: string, m: Record<string, unknown> = {}): void {
-    void this.dispatch(cmd, m);
+    this.commandQueue = this.commandQueue.then(() => this.dispatch(cmd, m));
   }
 
   private async dispatch(cmd: string, m: Record<string, unknown>): Promise<void> {

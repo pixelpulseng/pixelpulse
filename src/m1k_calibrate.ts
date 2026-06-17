@@ -142,6 +142,21 @@ function applyCal(raw: number, c: CalSet): number {
 
 // --- Wizard steps ---
 
+// Steps can be re-run (e.g. after fixing a loose resistor); each one discards
+// its own previous points first so repeats replace rather than accumulate.
+// `keep` preserves leading pairs owned by an earlier step (the measure-I zero
+// point lives at index 0 of the set the current step appends gain points to).
+function resetSets(sets: number[], keep = 0): boolean {
+  let hadData = false;
+  for (const s of sets) {
+    if (pairs[s].length > keep) {
+      pairs[s].length = keep;
+      hadData = true;
+    }
+  }
+  return hadData;
+}
+
 function readInputs(): void {
   railV = parseFloat(el<HTMLInputElement>('inp-rail').value);
   rExt = parseFloat(el<HTMLInputElement>('inp-rext').value);
@@ -167,10 +182,14 @@ async function stepReset(): Promise<void> {
   }
   for (let i = 0; i < 8; i++) pairs[i] = [];
   newCal = null;
+  hide('step-review');
 }
 
 // Measure-V: both channels in HI_Z; switch inputs to GND, then to the rail.
 async function stepMeasureV(): Promise<void> {
+  if (resetSets([0, 4])) {
+    log('Repeating measure-V — previous points discarded. Later steps used the old points; repeat them too.');
+  }
   for (const [ch, set] of [['a', 0], ['b', 4]] as const) {
     await setMode(ch, HI_Z);
 
@@ -193,6 +212,7 @@ async function stepMeasureV(): Promise<void> {
 
 // Source-V: unloaded output read back through the now-known measure-V cal.
 async function stepSourceV(): Promise<void> {
+  if (resetSets([2, 6])) log('Repeating source-V — previous points discarded.');
   for (const [ch, mvSet, svSet] of [['a', 0, 2], ['b', 4, 6]] as const) {
     if (pairs[mvSet].length < 2) fail(`Measure-V for channel ${ch.toUpperCase()} not captured yet`);
     const mv = computeSet(pairs[mvSet]);
@@ -215,7 +235,10 @@ async function stepMeasureIZero(): Promise<void> {
     await setFrontend(ch, { r50_2v5: false, r50_gnd: false });
     await setMode(ch, SVMI, 2.5);
     const iRaw = await captureSample(iStream(ch)) / 1000; // mA -> A
-    pairs[set].push({ ref: 0, val: iRaw });
+    // The zero point is always pairs[set][0] (computeSet derives the offset
+    // from the first pair); assign rather than push so repeating this step
+    // replaces it without disturbing gain points captured afterwards.
+    pairs[set][0] = { ref: 0, val: iRaw };
     log(`CH ${ch.toUpperCase()} open-circuit current: ${(iRaw * 1000).toFixed(4)} mA`);
     await setMode(ch, HI_Z);
   }
@@ -230,6 +253,13 @@ async function stepCurrent(ch: 'a' | 'b'): Promise<void> {
   const siSet = ch === 'a' ? 3 : 7;
   if (pairs[mvSet].length < 2) fail(`Measure-V for channel ${ch.toUpperCase()} not captured yet`);
   if (pairs[miSet].length < 1) fail(`Measure-I zero for channel ${ch.toUpperCase()} not captured yet`);
+  // Keep the zero point at miSet[0]; drop any gain points from a previous run
+  // of this step (including partial data left behind by a mid-step failure).
+  const hadMi = resetSets([miSet], 1);
+  const hadSi = resetSets([siSet]);
+  if (hadMi || hadSi) {
+    log(`Repeating CH ${ch.toUpperCase()} current — previous points discarded.`);
+  }
   const mv = computeSet(pairs[mvSet]);
 
   // Measure-I gain: source voltage above/below the rail; the true current
@@ -239,8 +269,13 @@ async function stepCurrent(ch: 'a' | 'b'): Promise<void> {
     const vPin = applyCal(await captureSample(vStream(ch)), mv);
     const iRaw = await captureSample(iStream(ch)) / 1000; // mA -> A
     const iTrue = (vPin - railV) / rExt;
+    if (Math.abs(vPin - vTarget) > 0.5) {
+      await setMode(ch, HI_Z);
+      fail(`CH ${ch.toUpperCase()} commanded to ${vTarget.toFixed(1)} V but the pin reads ${vPin.toFixed(3)} V — the output isn't driving; fix and repeat this step`);
+    }
     if (Math.abs(iTrue) < 0.005) {
-      fail(`Only ${(iTrue * 1000).toFixed(2)} mA is flowing on CH ${ch.toUpperCase()} — is the resistor connected from the channel pin to the 2.5 V pin?`);
+      await setMode(ch, HI_Z);
+      fail(`Only ${(iTrue * 1000).toFixed(2)} mA is flowing on CH ${ch.toUpperCase()} — is the resistor connected from the channel pin to the 2.5 V pin? Fix and repeat this step`);
     }
     pairs[miSet].push({ ref: iTrue, val: iRaw });
     log(`CH ${ch.toUpperCase()} @ ${vPin.toFixed(4)} V: true ${(iTrue * 1000).toFixed(3)} mA, reads ${(iRaw * 1000).toFixed(3)} mA`);
@@ -253,6 +288,13 @@ async function stepCurrent(ch: 'a' | 'b'): Promise<void> {
     await setMode(ch, SIMV, cmdMa);
     const vPin = applyCal(await captureSample(vStream(ch)), mv);
     const iTrue = (vPin - railV) / rExt;
+    // Uncalibrated error is a few percent; a large mismatch means the channel
+    // isn't actually driving the resistor (loose connection, or the output
+    // stage not responding) and the fit would be garbage.
+    if (Math.abs(iTrue - cmdMa / 1000) > Math.max(0.005, 0.3 * Math.abs(cmdMa / 1000))) {
+      await setMode(ch, HI_Z);
+      fail(`CH ${ch.toUpperCase()} sourcing ${cmdMa} mA but ${(iTrue * 1000).toFixed(2)} mA flows through the resistor — check the connection (or the channel isn't driving), then repeat this step`);
+    }
     pairs[siSet].push({ ref: cmdMa / 1000, val: iTrue });
     log(`CH ${ch.toUpperCase()} sourcing ${cmdMa} mA: true ${(iTrue * 1000).toFixed(3)} mA`);
   }
@@ -322,25 +364,38 @@ async function writeCal(): Promise<void> {
 let busy = false;
 
 function runStep(id: string, fn: () => Promise<void>, nextId?: string): void {
-  el(`btn-${id}`).addEventListener('click', async () => {
+  const btn = el<HTMLButtonElement>(`btn-${id}`);
+  btn.addEventListener('click', async () => {
     if (busy || !device) return;
     busy = true;
-    el<HTMLButtonElement>(`btn-${id}`).disabled = true;
+    btn.disabled = true;
     try {
       await fn();
       if (nextId) show(`step-${nextId}`);
+      if (!btn.dataset.done) {
+        btn.dataset.done = '1';
+        btn.textContent = `↻ ${btn.textContent}`;
+      }
+      // Re-running an earlier step makes a shown review table stale
+      if (newCal) renderReview();
     } catch (e) {
       console.error(e);
-      el<HTMLButtonElement>(`btn-${id}`).disabled = false;
     } finally {
       busy = false;
+      btn.disabled = false; // steps stay repeatable after success or failure
     }
   });
 }
 
+let deviceInitialized = false;
+
 function chooseDevice(): void {
   const m1k = server.devices.find(d => d.model === 'com.analogdevices.m1k');
   if (m1k) {
+    // devicesChanged can fire repeatedly (hotplug scans); don't tear down
+    // and re-select the device we are already using
+    if (device && device.id === m1k.id) return;
+    deviceInitialized = false;
     device = server.selectDevice(m1k) as CEEDevice;
     device.changed.subscribe(onDeviceReady);
   } else {
@@ -355,6 +410,12 @@ function onDeviceReady(dev: CEEDevice): void {
   hide('no-connect');
   show('wizard');
   setText('dev-info', `${dev.model} — hw ${dev.hwVersion}, fw ${dev.fwVersion}, serial ${dev.serial}`);
+
+  // One-time setup only: `changed` re-fires after every configure (on the
+  // WebUSB backend configure also pauses capture first), so kicking
+  // configure/startCapture from here unconditionally loops forever.
+  if (deviceInitialized) return;
+  deviceInitialized = true;
 
   // Need a running capture for listeners; mirror pixelpulse defaults
   if (!dev.captureState) {
