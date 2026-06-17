@@ -45,6 +45,16 @@
   <p>Step <select id="source_stream"></select> from <input type="number" id="v1" /><span id="v1-unit">V</span> to <input type="number" id="v2" /><span id="v2-unit">V</span>.</p>
   <p>Measure <select id="sense_stream"></select></p>
   <button id="startpause" title="Start" class="startbtn"></button>
+  <p>
+    <select id="export-png-plot">
+      <option value="step">Step response</option>
+      <option value="impulse">Impulse response</option>
+      <option value="magnitude">Gain</option>
+      <option value="phase">Phase</option>
+    </select>
+    <input type="text" id="export-png-label" placeholder="Label (optional)" maxlength="120" />
+    <button id="export-png" title="Save plot as PNG">Save PNG</button>
+  </p>
 </div>
 <div id="update-notify"></div>
 <script type="module" src="./bodeplot.ts"></script>
