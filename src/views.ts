@@ -949,6 +949,7 @@ export function setupToolbar(): void {
     snapshotPNG(layers, {
       title: `${g.stream.displayName} (${g.stream.units})`,
       label: label || undefined,
+      filename: g.stream.displayName,
     });
   });
 

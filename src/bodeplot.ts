@@ -227,22 +227,27 @@ class App {
 
     getEl('export-png').addEventListener('click', () => {
       const which = getSelect('export-png-plot').value;
-      const plots: Record<string, { plot: GraphCanvas; title: string }> = {
-        step: { plot: this.step_plot, title: 'Step response (V)' },
-        impulse: { plot: this.imp_plot, title: 'Impulse response (V)' },
-        magnitude: { plot: this.mag_plot, title: 'Gain (dB)' },
-        phase: { plot: this.phase_plot, title: 'Phase (°)' },
+      const plots: Record<string, { plot: GraphCanvas; title: string; file: string }> = {
+        step: { plot: this.step_plot, title: 'Step response (V)', file: 'step-response' },
+        impulse: { plot: this.imp_plot, title: 'Impulse response (V)', file: 'impulse-response' },
+        magnitude: { plot: this.mag_plot, title: 'Gain (dB)', file: 'gain' },
+        phase: { plot: this.phase_plot, title: 'Phase (°)', file: 'phase' },
       };
-      const p = plots[which];
-      if (!p) return;
       const label = getInput('export-png-label').value.trim();
-      // Re-render synchronously so the WebGL trace buffer is populated when
-      // snapshotPNG reads it back (no preserveDrawingBuffer).
-      p.plot.drawSync();
-      snapshotPNG([p.plot.axisCanvas, p.plot.graphCanvas], {
-        title: p.title,
-        label: label || undefined,
-      });
+      const keys = which === 'all' ? Object.keys(plots) : [which];
+
+      for (const key of keys) {
+        const p = plots[key];
+        if (!p) continue;
+        // Re-render synchronously so the WebGL trace buffer is populated when
+        // snapshotPNG reads it back (no preserveDrawingBuffer).
+        p.plot.drawSync();
+        snapshotPNG([p.plot.axisCanvas, p.plot.graphCanvas], {
+          title: p.title,
+          label: label || undefined,
+          filename: p.file,
+        });
+      }
     });
 
     const paramEls = ['source_stream', 'sense_stream', 'v1', 'v2'];

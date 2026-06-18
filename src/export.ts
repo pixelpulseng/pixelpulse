@@ -23,6 +23,9 @@ export interface SnapshotMeta {
   title: string;
   // Optional free-text chart label entered by the user.
   label?: string;
+  // Optional base name for the downloaded file (without extension). A
+  // timestamp is appended for uniqueness; defaults to "snapshot".
+  filename?: string;
 }
 
 // Composite a stack of aligned, equal-size canvases (back-to-front) into one
@@ -72,8 +75,9 @@ export function snapshotPNG(
     if (layer.width > 0 && layer.height > 0) ctx.drawImage(layer, 0, barH);
   }
 
+  const base = (meta.filename ?? 'snapshot').replace(/[^\w.-]+/g, '_');
   out.toBlob((blob) => {
-    if (blob) downloadFile([blob], 'image/png', `snapshot${+new Date()}.png`);
+    if (blob) downloadFile([blob], 'image/png', `${base}${+new Date()}.png`);
   }, 'image/png');
 }
 
