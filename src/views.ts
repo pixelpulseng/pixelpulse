@@ -9,7 +9,7 @@ import {
   type CEEDevice, type Channel, type Stream, type OutputSource, type UpdateMessage,
   Listener, DataListener, server,
 } from './dataserver.js';
-import { AXIS_SPACING } from './livegraph.js';
+import { AXIS_SPACING, type GraphCanvas } from './livegraph.js';
 import { unitPrefixScale } from './human-units.js';
 import {
   TimeseriesGraphListener, TimeseriesGraph, XYGraphView,
@@ -42,6 +42,7 @@ export let channelviews: ChannelView[] = [];
 // timeseriesGraphs tracked via timeseries.graphs
 let sidegraph1: XYGraphView;
 let sidegraph2: XYGraphView;
+let currentLayout = 0; // # of side-graph panes shown (0/1/2)
 let hidePopupFn: (() => void) | null = null;
 
 // --- Init view ---
@@ -742,6 +743,7 @@ function formatResistance(ohms: number): string {
 // --- Layout ---
 
 export function setLayout(l: number): void {
+  currentLayout = l;
   document.body.classList.remove('layout-0side', 'layout-1side', 'layout-2side');
   document.body.classList.add(`layout-${l}side`);
 
@@ -785,6 +787,38 @@ export function makeStreamSelect(): StreamSelectElement {
   sel.stream = () => streams[parseInt(sel.value)];
 
   return sel;
+}
+
+// --- Snapshot targets ---
+
+interface SnapshotTarget {
+  graph: GraphCanvas;
+  title: string;
+  filename: string;
+}
+
+// Everything currently on screen that can be saved as a PNG: the time-series
+// channel graphs, plus any side-graph XY/V-I plots visible in the current
+// layout. Rebuilt on each export so it reflects the live layout and streams.
+function snapshotTargets(): SnapshotTarget[] {
+  const targets: SnapshotTarget[] = timeseries.graphs.map(g => ({
+    graph: g,
+    title: `${g.stream.displayName} (${g.stream.units})`,
+    filename: g.stream.displayName,
+  }));
+
+  const sidegraphs = [sidegraph1, sidegraph2];
+  for (let i = 0; i < currentLayout && i < sidegraphs.length; i++) {
+    const sg = sidegraphs[i];
+    if (!sg?.xstream || !sg.ystream) continue;
+    const title = `${sg.ystream.displayName} vs ${sg.xstream.displayName}`;
+    targets.push({
+      graph: sg.lg,
+      title,
+      filename: `${sg.ystream.displayName}-vs-${sg.xstream.displayName}`,
+    });
+  }
+  return targets;
 }
 
 // --- Document ready setup ---
@@ -918,12 +952,13 @@ export function setupToolbar(): void {
   let hideExport: (() => void) | null = null;
   if (exportBtn && exportPopup && pngGraphSel) {
     hideExport = btnPopup(exportBtn, exportPopup, () => {
-      // Populate the PNG graph picker with the current timeseries graphs.
+      // Populate the PNG picker with everything currently on screen: the
+      // time-series channel graphs plus any visible side-graph XY/V-I plots.
       pngGraphSel.innerHTML = '';
-      timeseries.graphs.forEach((g, i) => {
+      snapshotTargets().forEach((t, i) => {
         const opt = document.createElement('option');
         opt.value = String(i);
-        opt.textContent = `${g.stream.displayName} (${g.stream.units})`;
+        opt.textContent = t.title;
         pngGraphSel.appendChild(opt);
       });
     });
@@ -935,11 +970,11 @@ export function setupToolbar(): void {
   });
 
   document.getElementById('export-png')?.addEventListener('click', () => {
-    const idx = parseInt(pngGraphSel?.value ?? '0', 10);
-    const g = timeseries.graphs[idx];
-    if (!g) return;
+    const t = snapshotTargets()[parseInt(pngGraphSel?.value ?? '0', 10)];
+    if (!t) return;
     const label = (document.getElementById('export-png-label') as HTMLInputElement | null)?.value.trim();
     hideExport?.();
+    const g = t.graph;
     // Re-render synchronously so the WebGL trace buffer is populated when
     // snapshotPNG reads it back (it has no preserveDrawingBuffer).
     g.drawSync();
@@ -947,9 +982,9 @@ export function setupToolbar(): void {
     const layers = [g.axisCanvas, g.graphCanvas];
     if (g.phosphor) layers.push(g.phosphor.canvas);
     snapshotPNG(layers, {
-      title: `${g.stream.displayName} (${g.stream.units})`,
+      title: t.title,
       label: label || undefined,
-      filename: g.stream.displayName,
+      filename: t.filename,
     });
   });
 
