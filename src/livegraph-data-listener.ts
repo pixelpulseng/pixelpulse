@@ -758,9 +758,9 @@ export class OverlayGraph {
       new ZoomXAction({ time: 200, zoomFactor: zf }, this.lg, pos, xTargets());
     };
 
-    // Build one trace per stream; all start disabled so the UI decides what
-    // shows. A sensible default perDiv puts the stream's full range across a
-    // few divisions.
+    // Build one trace per stream. Voltage traces start enabled (like a scope
+    // powering on with its channels visible); currents are opt-in. A sensible
+    // default perDiv puts the stream's full range across a few divisions.
     streams.forEach((stream, i) => {
       const series = new DataSeries(timeseries, 'time', stream);
       const color = colors[i] ?? [255, 0, 0];
@@ -770,7 +770,7 @@ export class OverlayGraph {
         stream,
         series,
         color,
-        enabled: false,
+        enabled: stream.units === 'V',
         perDiv: niceStep(fullRange / OVERLAY_HALF_DIVS),
         position: 0,
       });

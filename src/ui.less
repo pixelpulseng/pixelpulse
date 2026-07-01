@@ -296,7 +296,17 @@ body.overlay-mode{
 		}
 
 		.overlay-perdiv{ width: 100%; margin-bottom: 4px; }
-		.overlay-pos{ width: 100%; }
+
+		.overlay-pos-row{
+			.box(horizontal, start, center);
+			.overlay-pos{ .flex(1); }
+			.overlay-pos-val{
+				width: 58px;
+				text-align: right;
+				font-size: 11px;
+				color: #555;
+			}
+		}
 	}
 }
 

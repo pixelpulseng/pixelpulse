@@ -45,7 +45,6 @@ let sidegraph2: XYGraphView;
 let overlayGraph: OverlayGraph | null = null;
 let overlayMode = false;
 let currentLayout = 0; // # of side-graph panes shown (0/1/2)
-let hidePopupFn: (() => void) | null = null;
 
 // --- Init view ---
 
@@ -161,8 +160,10 @@ export function togglePhosphor(): void {
 }
 
 // Scope-style "divisions" choices for the per-trace units/div selector.
+// Extends to 200 so current streams (±200 mA full scale, default 50 mA/div)
+// have their working range available.
 const PER_DIV_STEPS = [
-  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10,
+  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200,
 ];
 
 // Build the overlay controls panel: one row per stream with an include
@@ -193,7 +194,12 @@ function buildOverlayControls(): void {
     const perDiv = document.createElement('select');
     perDiv.className = 'overlay-perdiv';
     perDiv.title = `${t.stream.units} per division`;
-    for (const step of PER_DIV_STEPS) {
+    // Include the trace's active perDiv even if it's not a standard step, so
+    // the dropdown always displays the true setting.
+    const steps = PER_DIV_STEPS.includes(t.perDiv)
+      ? PER_DIV_STEPS
+      : [...PER_DIV_STEPS, t.perDiv].sort((a, b) => a - b);
+    for (const step of steps) {
       const opt = document.createElement('option');
       opt.value = String(step);
       opt.textContent = `${step} ${t.stream.units}/div`;
@@ -208,16 +214,32 @@ function buildOverlayControls(): void {
     pos.min = '-4'; pos.max = '4'; pos.step = '0.1';
     pos.value = String(t.position);
     pos.title = 'Vertical position (divisions)';
-    pos.addEventListener('input', () => overlayGraph!.setPosition(t.stream, parseFloat(pos.value)));
+
+    const posVal = document.createElement('output');
+    posVal.className = 'overlay-pos-val';
+    const fmtPos = (p: number): string => `${p >= 0 ? '+' : ''}${p.toFixed(1)} div`;
+    posVal.textContent = fmtPos(t.position);
+
+    pos.addEventListener('input', () => {
+      const p = parseFloat(pos.value);
+      posVal.textContent = fmtPos(p);
+      overlayGraph!.setPosition(t.stream, p);
+    });
+
+    const posRow = document.createElement('div');
+    posRow.className = 'overlay-pos-row';
+    posRow.appendChild(pos);
+    posRow.appendChild(posVal);
 
     row.appendChild(label);
     row.appendChild(perDiv);
-    row.appendChild(pos);
+    row.appendChild(posRow);
     panel.appendChild(row);
   }
 }
 
 export function setOverlay(enabling: boolean): void {
+  if (enabling && !overlayGraph) return; // no device/view yet
   overlayMode = enabling;
   document.body.classList.toggle('overlay-mode', overlayMode);
   // The body-class CSS (body.overlay-mode #overlaybtn) drives the active
@@ -894,10 +916,12 @@ interface SnapshotTarget {
 // channel graphs, plus any side-graph XY/V-I plots visible in the current
 // layout. Rebuilt on each export so it reflects the live layout and streams.
 function snapshotTargets(): SnapshotTarget[] {
+  // Both channels' streams share displayName ("Voltage"/"Current"), so the
+  // channel name is required to disambiguate picker entries and filenames.
   const targets: SnapshotTarget[] = timeseries.graphs.map(g => ({
     graph: g,
-    title: `${g.stream.displayName} (${g.stream.units})`,
-    filename: g.stream.displayName,
+    title: `${g.stream.parent.displayName} ${g.stream.displayName} (${g.stream.units})`,
+    filename: `${g.stream.parent.displayName}-${g.stream.displayName}`,
   }));
 
   const sidegraphs = [sidegraph1, sidegraph2];
@@ -928,8 +952,9 @@ export function setupToolbar(): void {
   // Config popup
   const configBtn = document.getElementById('device-config');
   const configPopup = document.getElementById('config-popup');
+  let hideConfig: (() => void) | null = null;
   if (configBtn && configPopup) {
-    btnPopup(configBtn, configPopup, () => {
+    hideConfig = btnPopup(configBtn, configPopup, () => {
       const dev = server.device as CEEDevice;
       const rateSelect = document.getElementById('config-sample-rate') as HTMLSelectElement;
       for (const opt of Array.from(rateSelect.options)) {
@@ -1002,7 +1027,7 @@ export function setupToolbar(): void {
 
   // Apply config
   document.getElementById('device-config-apply')?.addEventListener('click', () => {
-    hidePopupFn?.();
+    hideConfig?.();
     const rate = parseFloat(
       (document.getElementById('config-sample-rate') as HTMLSelectElement).value,
     );
@@ -1012,6 +1037,7 @@ export function setupToolbar(): void {
   // Export popup: CSV download or PNG snapshot of a chosen graph
   const exportCSV = (): void => {
     const dev = server.device as CEEDevice;
+    const wasCapturing = !!dev.captureState;
     dev.pauseCapture();
     const len = timeseries.doneSamples;
     const maxCount = 40000;
@@ -1044,6 +1070,9 @@ export function setupToolbar(): void {
       });
 
       downloadCSV(cols);
+      // Capture was only paused to snapshot a consistent buffer; hand the
+      // device back in the state the user left it.
+      if (wasCapturing) dev.startCapture();
     });
   };
 
@@ -1092,14 +1121,28 @@ export function setupToolbar(): void {
   // Window resize
   window.addEventListener('resize', () => layoutChanged.notify());
 
-  // Start/pause
-  document.getElementById('startpause')?.addEventListener('click', () => {
+  // Start/pause (button + spacebar)
+  const toggleCapture = (): void => {
     const dev = server.device as CEEDevice;
+    if (!dev) return;
     if (dev.captureState) {
       dev.pauseCapture();
     } else {
       dev.startCapture();
     }
+  };
+  document.getElementById('startpause')?.addEventListener('click', toggleCapture);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    // Don't hijack space while typing in a field or focused on a control.
+    const t = e.target as HTMLElement | null;
+    const tag = t?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON' || t?.isContentEditable) {
+      return;
+    }
+    e.preventDefault(); // stop the page from scrolling
+    toggleCapture();
   });
 
   captureState.subscribe((s) => {
