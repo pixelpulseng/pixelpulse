@@ -697,3 +697,140 @@ export class XYGraphView {
     this.lg.resized();
   };
 }
+
+// --- OverlayGraph: scope-style multi-trace plot on shared divisions axis ---
+
+export interface OverlayTrace {
+  stream: Stream;
+  series: DataSeries;
+  color: [number, number, number];
+  enabled: boolean;
+  // Scope vertical controls. perDiv = stream units per screen division;
+  // position = vertical offset in divisions (positive = up).
+  perDiv: number;
+  position: number;
+}
+
+// Number of vertical divisions above and below center (8 divisions total,
+// like a typical scope graticule).
+const OVERLAY_HALF_DIVS = 4;
+
+export class OverlayGraph {
+  lg: GraphCanvas;
+  traces: OverlayTrace[] = [];
+  private yaxis: Axis;
+  private timeseries: TimeseriesGraphListener;
+  private _layoutChanged: TypedEvent;
+
+  constructor(
+    public el: HTMLElement,
+    timeseries: TimeseriesGraphListener,
+    streams: Stream[],
+    colors: [number, number, number][],
+    layoutChanged: TypedEvent,
+  ) {
+    this.timeseries = timeseries;
+    this._layoutChanged = layoutChanged;
+
+    // Unitless "divisions" y-axis: the graticule is the shared reference and
+    // each trace maps its own units onto it via perDiv/position.
+    this.yaxis = new Axis(-OVERLAY_HALF_DIVS, OVERLAY_HALF_DIVS, 'div');
+
+    this.lg = new GraphCanvas(el, timeseries.xaxis, this.yaxis, [], {
+      xbottom: true, yright: false, xgrid: true, ygrid: true,
+    });
+
+    // X-axis pan/zoom: the overlay shares timeseries.xaxis, so it must drive
+    // the same listener actions the stacked TimeseriesGraphs use — otherwise a
+    // drag/zoom would move the axis without refetching data at the new window.
+    // Targets include this overlay's canvas so it animates in lockstep.
+    const xTargets = (): GraphCanvas[] => [this.lg, ...timeseries.graphs];
+    this.lg.onResized = () => timeseries.queueWindowUpdate();
+    this.lg.onClick = (pos): void => {
+      if (timeseries.canChangeView()) {
+        new DragScrollAction(this.lg, pos, xTargets());
+      }
+    };
+    this.lg.onDblClick = (e, pos, btn): void => {
+      if (!timeseries.canChangeView()) return;
+      const zf = (e.shiftKey || btn === 2) ? 2 : 0.5;
+      if (zf < 1 && timeseries.xaxis.span() < 40 * timeseries.device.sampleTime) return;
+      new ZoomXAction({ time: 200, zoomFactor: zf }, this.lg, pos, xTargets());
+    };
+
+    // Build one trace per stream; all start disabled so the UI decides what
+    // shows. A sensible default perDiv puts the stream's full range across a
+    // few divisions.
+    streams.forEach((stream, i) => {
+      const series = new DataSeries(timeseries, 'time', stream);
+      const color = colors[i] ?? [255, 0, 0];
+      series.color = color;
+      const fullRange = Math.max(Math.abs(stream.min), Math.abs(stream.max)) || 1;
+      this.traces.push({
+        stream,
+        series,
+        color,
+        enabled: false,
+        perDiv: niceStep(fullRange / OVERLAY_HALF_DIVS),
+        position: 0,
+      });
+    });
+
+    timeseries.updated.subscribe(this.updated);
+    this._layoutChanged.subscribe(this.relayout);
+    this.applyTraces();
+  }
+
+  // Push the current enabled/perDiv/position state into the graph's series
+  // list and per-series vertical transforms, then redraw.
+  applyTraces(): void {
+    const active = this.traces.filter(t => t.enabled);
+    for (const t of active) {
+      // screen_div = ydata / perDiv + position. Series renders
+      // (ydata - yoffset) * yscale, so yscale = 1/perDiv and
+      // yoffset = -position * perDiv.
+      t.series.yscale = 1 / t.perDiv;
+      t.series.yoffset = -t.position * t.perDiv;
+      t.series.color = t.color;
+    }
+    this.lg.series = active.map(t => t.series);
+    this.lg.needsRedraw(true);
+  }
+
+  setEnabled(stream: Stream, enabled: boolean): void {
+    const t = this.traces.find(tr => tr.stream === stream);
+    if (t) { t.enabled = enabled; this.applyTraces(); }
+  }
+
+  setPerDiv(stream: Stream, perDiv: number): void {
+    const t = this.traces.find(tr => tr.stream === stream);
+    if (t && perDiv > 0) { t.perDiv = perDiv; this.applyTraces(); }
+  }
+
+  setPosition(stream: Stream, position: number): void {
+    const t = this.traces.find(tr => tr.stream === stream);
+    if (t) { t.position = position; this.applyTraces(); }
+  }
+
+  private updated = (): void => {
+    this.lg.needsRedraw();
+  };
+
+  private relayout = (): void => {
+    this.lg.resized();
+  };
+
+  hidden(): void {
+    this.timeseries.updated.unListen(this.updated);
+    this._layoutChanged.unListen(this.relayout);
+  }
+}
+
+// Round a step up to a 1/2/5 ×10ⁿ "nice" value, for default per-division scaling.
+function niceStep(x: number): number {
+  if (!(x > 0)) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / pow;
+  const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return nice * pow;
+}

@@ -41,6 +41,11 @@ Run <code>sudo /etc/init.d/nonolith-connect start</code> in a terminal to start 
 <section id="timeaxis"></section>
 </div>
 
+<div id="overlay">
+  <div id="overlay-controls"></div>
+  <div id="overlay-graph" class="livegraph"></div>
+</div>
+
 <div id="sidegraphs">
 <section id="sidegraph1"></section>
 <section id="sidegraph2"></section>
@@ -57,6 +62,7 @@ Run <code>sudo /etc/init.d/nonolith-connect start</code> in a terminal to start 
   <div id="toolbar-left">
     <button title="Toggle triggering (for repeating signals)" onclick="pixelpulse.toggleTrigger()" id="triggerbtn">Trigger</button>
     <button title="Toggle phosphor/density rendering" onclick="pixelpulse.togglePhosphor()" id="phosphorbtn">Phosphor</button>
+    <button title="Overlay channels on one scope-style axis" onclick="pixelpulse.toggleOverlay()" id="overlaybtn">Overlay</button>
     <button id="zoomfit" title="Auto zoom" onclick="pixelpulse.autozoom()">Auto-zoom</button>
   </div>
   <div class="spacer"></div>

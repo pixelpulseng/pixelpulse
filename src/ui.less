@@ -202,7 +202,7 @@ body.os-mac .osspec.mac{
 	#download-btn{background: url('img/download.png');}
 	#zoomfit{background: url('img/zoomfit.png');}
 	#triggerbtn{background: url('img/trigger.png');}
-	#phosphorbtn{
+	#phosphorbtn, #overlaybtn{
 		width: auto !important;
 		font-size: 11px !important;
 		padding: 0 8px;
@@ -219,6 +219,7 @@ body.os-mac .osspec.mac{
 	button.active,
 	body.triggering & #triggerbtn,
 	body.phosphor-mode & #phosphorbtn,
+	body.overlay-mode & #overlaybtn,
 	body.layout-0side & #layout0, body.layout-1side & #layout1, body.layout-2side & #layout2,
 	#device-config.active{
 		opacity: 1;
@@ -260,10 +261,54 @@ body.os-mac .osspec.mac{
 	font-size: 18px;
 }
 
+// Scope-style overlay view: hidden until the Overlay toolbar toggle is on,
+// at which point it replaces the stacked per-stream graphs.
+#overlay{
+	display: none;
+	.flex(1);
+	.box(horizontal, start, stretch);
+}
+
+body.overlay-mode{
+	#streams, #sidegraphs{ display: none; }
+	#overlay{ display: -webkit-box; display: box; }
+}
+
+#overlay-controls{
+	width: 240px;
+	box-sizing: border-box;
+	padding: 8px;
+	background: #f0f0f0;
+	border-right: 1px solid #ccc;
+	overflow-y: auto;
+
+	.overlay-row{
+		border-left: 4px solid var(--trace-color, #888);
+		padding: 6px 8px;
+		margin-bottom: 6px;
+		background: white;
+
+		.overlay-name{
+			display: block;
+			font-weight: bold;
+			color: var(--trace-color, #333);
+			margin-bottom: 4px;
+		}
+
+		.overlay-perdiv{ width: 100%; margin-bottom: 4px; }
+		.overlay-pos{ width: 100%; }
+	}
+}
+
+#overlay-graph{
+	.flex(1);
+	position: relative;
+}
+
 #streams{
 	.box(vertical, stretch, stretch);
 	.flex(1);
-	
+
 	aside{
 		.box;
 		width: 200px;

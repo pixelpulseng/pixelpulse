@@ -12,7 +12,7 @@ import {
 import { AXIS_SPACING, type GraphCanvas } from './livegraph.js';
 import { unitPrefixScale } from './human-units.js';
 import {
-  TimeseriesGraphListener, TimeseriesGraph, XYGraphView,
+  TimeseriesGraphListener, TimeseriesGraph, XYGraphView, OverlayGraph,
   type StreamSelectElement,
 } from './livegraph-data-listener.js';
 import { numberWidget, selectDropdown, btnPopup, waveformIconBar, type NumberWidget, type WaveformIconBar } from './widgets.js';
@@ -42,6 +42,8 @@ export let channelviews: ChannelView[] = [];
 // timeseriesGraphs tracked via timeseries.graphs
 let sidegraph1: XYGraphView;
 let sidegraph2: XYGraphView;
+let overlayGraph: OverlayGraph | null = null;
+let overlayMode = false;
 let currentLayout = 0; // # of side-graph panes shown (0/1/2)
 let hidePopupFn: (() => void) | null = null;
 
@@ -79,6 +81,16 @@ export function initView(dev: CEEDevice): void {
     document.getElementById('sidegraph2')!,
     timeseries, makeStreamSelect, layoutChanged,
   );
+
+  // Scope-style overlay graph (all enabled streams on one divisions axis).
+  // streams are enumerated channel-major (A.v, A.i, B.v, B.i), so the flat
+  // color list mirrors COLORS[channel][stream].
+  const overlayColors = COLORS.flat();
+  overlayGraph = new OverlayGraph(
+    document.getElementById('overlay-graph')!,
+    timeseries, streams, overlayColors, layoutChanged,
+  );
+  buildOverlayControls();
 
   // Show x-axis ticks on the last visible stream
   relayoutXAxis();
@@ -148,6 +160,78 @@ export function togglePhosphor(): void {
   setPhosphor(!timeseries.graphs[0]?.phosphorEnabled);
 }
 
+// Scope-style "divisions" choices for the per-trace units/div selector.
+const PER_DIV_STEPS = [
+  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10,
+];
+
+// Build the overlay controls panel: one row per stream with an include
+// checkbox, a units/div selector, and a vertical-position slider, each row
+// color-keyed to its trace.
+function buildOverlayControls(): void {
+  const panel = document.getElementById('overlay-controls');
+  if (!panel || !overlayGraph) return;
+  panel.innerHTML = '';
+
+  for (const t of overlayGraph.traces) {
+    const row = document.createElement('div');
+    row.className = 'overlay-row';
+    row.style.setProperty('--trace-color', `rgb(${t.color[0]},${t.color[1]},${t.color[2]})`);
+
+    const name = `${t.stream.parent.displayName} ${t.stream.displayName}`;
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = t.enabled;
+    cb.addEventListener('change', () => overlayGraph!.setEnabled(t.stream, cb.checked));
+
+    const label = document.createElement('label');
+    label.className = 'overlay-name';
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(` ${name}`));
+
+    const perDiv = document.createElement('select');
+    perDiv.className = 'overlay-perdiv';
+    perDiv.title = `${t.stream.units} per division`;
+    for (const step of PER_DIV_STEPS) {
+      const opt = document.createElement('option');
+      opt.value = String(step);
+      opt.textContent = `${step} ${t.stream.units}/div`;
+      if (step === t.perDiv) opt.selected = true;
+      perDiv.appendChild(opt);
+    }
+    perDiv.addEventListener('change', () => overlayGraph!.setPerDiv(t.stream, parseFloat(perDiv.value)));
+
+    const pos = document.createElement('input');
+    pos.type = 'range';
+    pos.className = 'overlay-pos';
+    pos.min = '-4'; pos.max = '4'; pos.step = '0.1';
+    pos.value = String(t.position);
+    pos.title = 'Vertical position (divisions)';
+    pos.addEventListener('input', () => overlayGraph!.setPosition(t.stream, parseFloat(pos.value)));
+
+    row.appendChild(label);
+    row.appendChild(perDiv);
+    row.appendChild(pos);
+    panel.appendChild(row);
+  }
+}
+
+export function setOverlay(enabling: boolean): void {
+  overlayMode = enabling;
+  document.body.classList.toggle('overlay-mode', overlayMode);
+  // The body-class CSS (body.overlay-mode #overlaybtn) drives the active
+  // highlight, matching the Phosphor button.
+  // Whichever view just became visible was display:none and so has a stale,
+  // zero-size canvas; notify layout to resize and redraw both directions.
+  layoutChanged.notify();
+  if (overlayMode) overlayGraph?.lg.needsRedraw(true);
+}
+
+export function toggleOverlay(): void {
+  setOverlay(!overlayMode);
+}
+
 export function setPhosphor(enabling: boolean): void {
   const btn = document.getElementById('phosphorbtn');
   const accumulate = timeseries.isTriggerEnabled();
@@ -190,6 +274,15 @@ captureState.subscribe(() => {
 export function destroyView(): void {
   document.querySelectorAll('#streams section.channel').forEach(el => el.remove());
   document.querySelectorAll('#sidegraphs > section').forEach(el => { el.innerHTML = ''; });
+  overlayGraph?.hidden();
+  overlayGraph = null;
+  overlayMode = false;
+  document.body.classList.remove('overlay-mode');
+  document.getElementById('overlaybtn')?.classList.remove('active');
+  const overlayGraphEl = document.getElementById('overlay-graph');
+  if (overlayGraphEl) overlayGraphEl.innerHTML = '';
+  const overlayControlsEl = document.getElementById('overlay-controls');
+  if (overlayControlsEl) overlayControlsEl.innerHTML = '';
   meterListener?.cancel();
   timeseries?.cancel();
   for (const cv of channelviews) cv.destroy();
@@ -816,6 +909,14 @@ function snapshotTargets(): SnapshotTarget[] {
       graph: sg.lg,
       title,
       filename: `${sg.ystream.displayName}-vs-${sg.xstream.displayName}`,
+    });
+  }
+
+  if (overlayMode && overlayGraph) {
+    targets.unshift({
+      graph: overlayGraph.lg,
+      title: 'Overlay',
+      filename: 'overlay',
     });
   }
   return targets;

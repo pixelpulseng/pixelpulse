@@ -159,6 +159,14 @@ export const digitalAxis = new DigitalAxis();
 // --- Series ---
 
 export class Series {
+  // Per-series vertical transform applied on top of the graph's shared y-axis,
+  // for scope-style overlay mode where each trace has its own volts/div and
+  // vertical position. Rendered y = (ydata - yoffset) * yscale, so yoffset is
+  // in data units and yscale is a dimensionless gain. Defaults are a no-op, so
+  // ordinary single-axis graphs are unaffected.
+  yoffset = 0;
+  yscale = 1;
+
   constructor(
     public xdata: Float32Array | number[],
     public ydata: Float32Array | number[],
@@ -720,13 +728,17 @@ export class GraphCanvas {
       this.ctxg.beginPath();
       const datalen = Math.min(series.xdata.length, series.ydata.length);
 
+      // Fold the per-series vertical transform into sy/dy (see redrawGraphWebGL).
+      const sys = sy * series.yscale;
+      const dys = dy - sy * series.yoffset * series.yscale;
+
       let cull = true;
       for (let i = 0; i < datalen; i++) {
         if (cull && series.xdata[i + 1] < this.xaxis.visibleMin) continue;
 
         const x = series.xdata[i];
         const y = series.ydata[i];
-        this.ctxg.lineTo(x * sx + dx, y * sy + dy);
+        this.ctxg.lineTo(x * sx + dx, y * sys + dys);
 
         if (cull && x > this.xaxis.visibleMax) break;
       }
@@ -737,9 +749,13 @@ export class GraphCanvas {
     this.ctxg.globalAlpha = 1.0;
   }
 
+  // Base transform components (shared y-axis), cached for the per-series
+  // matrices built each frame in redrawGraphWebGL.
+  private glTransform: Transform = [0, 0, 0, 0];
+
   private webglRefreshViewParams(): void {
     if (!this.glState) return;
-    const { gl, shaderProgram } = this.glState;
+    const { gl } = this.glState;
 
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.enable(gl.SCISSOR_TEST);
@@ -747,25 +763,7 @@ export class GraphCanvas {
     gl.scissor(this.geom.xleft, this.height - this.geom.ybottom, this.geom.width, this.geom.height);
     gl.lineWidth(2);
 
-    const [sx, sy, dx, dy] = makeTransform(this.geom, this.xaxis, this.yaxis);
-    const w = 2.0 / this.width;
-    const h = -2.0 / this.height;
-
-    // Column-major order
-    const tmatrix = new Float32Array([
-      sx * w, 0, 0, 0,
-      0, sy * h, 0, 0,
-      dx * w, dy * h, 0, 0,
-      -1, 1, -1, 1,
-    ]);
-
-    gl.uniformMatrix4fv(shaderProgram.uniform.transform, false, tmatrix);
-    gl.uniform4fv(shaderProgram.uniform.color, new Float32Array([
-      this.series[0].color[0] / 255.0,
-      this.series[0].color[1] / 255.0,
-      this.series[0].color[2] / 255.0,
-      1,
-    ]));
+    this.glTransform = makeTransform(this.geom, this.xaxis, this.yaxis);
   }
 
   private redrawGraphWebGL(): void {
@@ -774,7 +772,31 @@ export class GraphCanvas {
 
     gl.clear(gl.COLOR_BUFFER_BIT);
 
+    const [sx, sy, dx, dy] = this.glTransform;
+    const w = 2.0 / this.width;
+    const h = -2.0 / this.height;
+
     for (const series of this.series) {
+      // Fold the per-series vertical transform (y-yoffset)*yscale into the
+      // shared y mapping: sy' = sy*yscale, dy' = dy - sy*yoffset*yscale.
+      const sys = sy * series.yscale;
+      const dys = dy - sy * series.yoffset * series.yscale;
+
+      // Column-major order
+      const tmatrix = new Float32Array([
+        sx * w, 0, 0, 0,
+        0, sys * h, 0, 0,
+        dx * w, dys * h, 0, 0,
+        -1, 1, -1, 1,
+      ]);
+      gl.uniformMatrix4fv(shaderProgram.uniform.transform, false, tmatrix);
+      gl.uniform4fv(shaderProgram.uniform.color, new Float32Array([
+        series.color[0] / 255.0,
+        series.color[1] / 255.0,
+        series.color[2] / 255.0,
+        1,
+      ]));
+
       gl.bindBuffer(gl.ARRAY_BUFFER, xBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, series.xdata as Float32Array, gl.STREAM_DRAW);
       gl.vertexAttribPointer(shaderProgram.attrib.x, 1, gl.FLOAT, false, 0, 0);
