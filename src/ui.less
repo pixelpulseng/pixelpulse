@@ -264,9 +264,11 @@ body.os-mac .osspec.mac{
 // Scope-style overlay view: hidden until the Overlay toolbar toggle is on,
 // at which point it replaces the stacked per-stream graphs.
 #overlay{
-	display: none;
 	.flex(1);
 	.box(horizontal, start, stretch);
+	// Must come after .box(): the mixin emits its own display declarations,
+	// and the later one wins — with none first, the pane is always visible.
+	display: none;
 }
 
 body.overlay-mode{

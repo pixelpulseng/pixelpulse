@@ -21,6 +21,7 @@ import { isSupported } from './smu/index.js';
 import { Dataserver } from './dataserver-common.js';
 import { WSDataserver } from './dataserver-ws.js';
 import { USBDataserver } from './dataserver-webusb.js';
+import { SimDataserver } from './dataserver-sim.js';
 
 export * from './dataserver-common.js';
 
@@ -28,7 +29,10 @@ export function webusbSupported(): boolean {
   return isSupported();
 }
 
-export type BackendChoice = { kind: 'webusb' } | { kind: 'websocket'; host: string };
+export type BackendChoice =
+  | { kind: 'webusb' }
+  | { kind: 'websocket'; host: string }
+  | { kind: 'sim' };
 
 export function chooseBackend(): BackendChoice {
   if (typeof location !== 'undefined') {
@@ -37,6 +41,9 @@ export function chooseBackend(): BackendChoice {
 
     const m = /(?:^#|&)connect(?:=([^&]+))?(?:&|$)/.exec(location.hash);
     if (m) return { kind: 'websocket', host: m[1] ?? 'localhost:9003' };
+
+    // Simulated M1K (software LED/resistor loads): hardware-free testing
+    if (/(?:^#|&)sim(?:&|$)/.test(location.hash)) return { kind: 'sim' };
   }
 
   if (isSupported()) return { kind: 'webusb' };
@@ -46,10 +53,12 @@ export function chooseBackend(): BackendChoice {
 export const backend: BackendChoice = chooseBackend();
 
 export const server: Dataserver =
-  backend.kind === 'websocket' ? new WSDataserver(backend.host) : new USBDataserver();
+  backend.kind === 'websocket' ? new WSDataserver(backend.host)
+    : backend.kind === 'sim' ? new SimDataserver()
+      : new USBDataserver();
 
 console.log(
   backend.kind === 'websocket'
     ? `dataserver: WebSocket backend (${backend.host})`
-    : 'dataserver: WebUSB backend',
+    : `dataserver: ${backend.kind} backend`,
 );

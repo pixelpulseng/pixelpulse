@@ -2,3 +2,4 @@ firmware/
 node_modules/
 dist/
 Pixelpulse2
+verify/out
