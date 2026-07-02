@@ -41,6 +41,15 @@ const LED_NVT = 2 * 0.02585; // N * thermal voltage, V
 const B_RAIL = 2.5; // V
 const B_R_KOHM = 0.1; // 100 ohms, in kOhm so V = RAIL + R * I[mA]
 
+// Optional battery model replacing channel A's LED (for the battery-test
+// applet): linear OCV vs state-of-charge with a series resistance. With
+// R = 1 Ω, a 4.2 V CV hold naturally tapers: I[mA] = (4.2 - Voc) * 1000,
+// hitting a 10 mA cutoff at Voc = 4.19 V — same shape as a real CC/CV tail.
+const BAT_V_EMPTY = 3.0;
+const BAT_V_SPAN = 1.2; // Voc = 3.0 + 1.2 * SOC → 4.2 V at SOC = 1
+const BAT_R_OHM = 1.0;
+const BAT_SOC_INITIAL = 0.55; // ~3.66 V, storage-ish
+
 const V_NOISE = 0.002; // V p-p/2
 const I_NOISE = 0.05; // mA p-p/2
 
@@ -82,9 +91,14 @@ export class SimM1K extends StreamingDevice {
   // layer's error handling.
   readonly usb = null as unknown as UsbTransport;
 
-  constructor() {
+  // Battery emulation on channel A (instead of the LED) when capacity is set
+  private batteryMAh = 0;
+  private batterySOC = BAT_SOC_INITIAL;
+
+  constructor(opts: { batteryMAh?: number } = {}) {
     super(DEFAULT_SAMPLE_TIME);
     this.minSampleTime = MIN_SAMPLE_TIME;
+    this.batteryMAh = opts.batteryMAh ?? 0;
     // Mirror M1KDevice.init(): arrive already configured for a 12 s
     // continuous buffer, so channels/streams exist when the dataserver
     // wraps this device and delivers the initial config to the UI.
@@ -165,6 +179,33 @@ export class SimM1K extends StreamingDevice {
     }
   }
 
+  // Battery on channel A: OCV from SOC, series-R terminal behavior, and
+  // coulomb integration of whatever current the mode forces.
+  private simBattery(mode: number, setpoint: number): [number, number] {
+    const voc = BAT_V_EMPTY + BAT_V_SPAN * this.batterySOC;
+    let v: number;
+    let iMA: number;
+
+    if (mode === SVMI) {
+      v = clamp(setpoint, V_MIN, V_MAX);
+      iMA = clamp(((v - voc) / BAT_R_OHM) * 1000, I_MIN, I_MAX);
+    } else if (mode === SIMV) {
+      iMA = clamp(setpoint, I_MIN, I_MAX);
+      v = clamp(voc + (iMA / 1000) * BAT_R_OHM, V_MIN, V_MAX);
+    } else {
+      iMA = 0;
+      v = voc;
+    }
+
+    // Coulomb count: positive current charges. Slight overshoot headroom so
+    // the CV tail behaves; discharge floor at empty.
+    this.batterySOC = clamp(
+      this.batterySOC + (iMA * (this.sampleTime / 3600)) / this.batteryMAh,
+      0, 1.05,
+    );
+    return [v, iMA];
+  }
+
   // Simulate one channel at sample index `i`: read the commanded output,
   // apply the load physics, return [V, I(mA)].
   private simChannel(ch: Channel, isLED: boolean, i: number): [number, number] {
@@ -175,7 +216,9 @@ export class SimM1K extends StreamingDevice {
     let v: number;
     let iMA: number;
 
-    if (mode === SVMI) {
+    if (isLED && this.batteryMAh > 0) {
+      [v, iMA] = this.simBattery(mode, setpoint);
+    } else if (mode === SVMI) {
       v = clamp(setpoint, V_MIN, V_MAX);
       iMA = isLED ? ledCurrentMA(v) : (v - B_RAIL) / B_R_KOHM;
     } else if (mode === SIMV) {

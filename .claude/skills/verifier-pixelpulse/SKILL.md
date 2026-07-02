@@ -15,7 +15,8 @@ are exercised.
 
 ```bash
 # dev server must be running (npm run dev, default port 8000)
-npm run verify              # headless
+npm run verify              # main pixelpulse UI (17 checks)
+npm run verify:battery      # LiPo capacity-test applet (12 checks, ~1 min)
 node verify/verify.mjs --headed         # watch it drive
 node verify/verify.mjs --url http://localhost:5173   # other port
 ```
@@ -35,6 +36,14 @@ Boot + device init, Start button, stacked layout default, phosphor pixels
 rendering, overlay mode (rows/defaults/readouts/dropdown integrity), export
 popup targets (incl. overlay only-when-enabled), PNG snapshot download +
 decode, Configure popup closes on Apply, spacebar start/pause.
+
+## Battery applet
+
+`battery.html#sim&bat=<mAh>` gives the sim a battery model on channel A
+(OCV = 3.0 + 1.2·SOC, 1 Ω series R — a 4.2 V CV hold tapers to 10 mA at
+Voc 4.19 V like a real CC/CV tail). `bat=0.5` makes a full
+charge/rest/discharge cycle finish in ~30 s. Expected discharge capacity
+for the model: ≈ 0.32 × capacity (4.2 → 3.7 V window).
 
 ## Extending
 

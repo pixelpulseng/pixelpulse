@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "verify": "node verify/verify.mjs"
+    "verify": "node verify/verify.mjs",
+    "verify:battery": "node verify/verify-battery.mjs"
   },
   "repository": {
     "type": "git",
