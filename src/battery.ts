@@ -112,6 +112,45 @@ function measure(seconds = WINDOW_S): Promise<{ v: number; i: number }> {
   });
 }
 
+// measure() with garbage rejection: the Connect (WebSocket) backend encodes
+// NaN samples as JSON null, and a system sleep / USB suspend stalls capture
+// and produces exactly that. Invalid windows are transient — retry a few
+// times before declaring the test dead.
+async function measureValid(seconds = WINDOW_S, attempts = 5): Promise<{ v: number; i: number }> {
+  for (let a = 1; ; a++) {
+    const { v, i } = await measure(seconds);
+    if (Number.isFinite(v) && Number.isFinite(i)) return { v, i };
+    if (a >= attempts) {
+      throw new TestAborted('error',
+        'no valid samples from the device — did the computer sleep? (capture stalls on suspend)');
+    }
+    log(`invalid sample window (v=${String(v)}, i=${String(i)}) — retrying ${a}/${attempts - 1}`, 'log-err');
+    await sleep(1000);
+  }
+}
+
+// Keep the machine awake for the duration of a test: a multi-hour capacity
+// run dies (capture stall → null samples) if the system suspends.
+let wakeLock: WakeLockSentinel | null = null;
+
+async function acquireWakeLock(): Promise<void> {
+  try {
+    wakeLock = (await navigator.wakeLock?.request('screen')) ?? null;
+  } catch {
+    wakeLock = null; // unsupported or denied — the retry logic is the fallback
+  }
+}
+
+async function releaseWakeLock(): Promise<void> {
+  try { await wakeLock?.release(); } catch { /* already released */ }
+  wakeLock = null;
+}
+
+// The lock is auto-released when the tab is hidden; re-acquire on return
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && running) void acquireWakeLock();
+});
+
 // --- Persistence ---
 
 function loadStore(): Store {
@@ -216,7 +255,7 @@ async function phase(
   const phaseStart = lastT;
   for (;;) {
     checkAbort();
-    const { v, i } = await measure();
+    const { v, i } = await measureValid();
     const now = performance.now();
     const dtH = (now - lastT) / 3600000;
     lastT = now;
@@ -265,6 +304,7 @@ async function runTest(cfg: TestConfig): Promise<void> {
   renderHistory();
 
   el<HTMLButtonElement>('btn-start').disabled = true;
+  await acquireWakeLock();
   show('btn-abort');
 
   try {
@@ -273,7 +313,7 @@ async function runTest(cfg: TestConfig): Promise<void> {
     await setMode('a', HI_Z);
     setState('checking cell');
     await sleep(500);
-    const { v: ocv } = await measure();
+    const { v: ocv } = await measureValid();
     log(`Open-circuit voltage: ${ocv.toFixed(3)} V`);
     if (ocv < 2.8 || ocv > cfg.vmax + 0.05) {
       throw new TestAborted('error',
@@ -292,7 +332,7 @@ async function runTest(cfg: TestConfig): Promise<void> {
       await setMode('a', HI_Z);
       await sleep(REST_S * 1000);
       checkAbort();
-      const { v: restV } = await measure();
+      const { v: restV } = await measureValid();
       cycle.restV = restV;
       log(`cycle ${c + 1}: rest OCV ${restV.toFixed(3)} V`);
       if (Math.abs(restV - cfg.vmax) > cfg.vtolMV / 1000) {
@@ -344,6 +384,7 @@ async function runTest(cfg: TestConfig): Promise<void> {
     renderHistory();
     try { await hiz; } catch { /* device gone */ }
     running = null;
+    void releaseWakeLock();
     setText('status-cycle', '');
     el<HTMLButtonElement>('btn-start').disabled = false;
     hide('btn-abort');
@@ -381,11 +422,15 @@ function renderHistory(): void {
     tbody.appendChild(tr);
   }
 
-  const latest = store.history.find(t => t.status === 'complete');
+  // Any test with completed discharge cycles carries a usable estimate —
+  // e.g. all 3 cycles done but marked 'interrupted' during a final recharge.
+  const latest = store.history.find(t => t.status !== 'running' && estimateOf(t) != null);
   const est = latest ? estimateOf(latest) : null;
+  const doneCycles = latest ? latest.cycles.filter(c => c.dischargeMAh != null).length : 0;
+  const caveat = latest && latest.status !== 'complete' ? `, ${latest.status} test` : '';
   el('estimate').innerHTML = est == null
     ? '<span class="note">No completed test yet.</span>'
-    : `Latest estimate: <b>${est.toFixed(1)} mAh</b> <span class="note">(${latest!.config.vmax.toFixed(2)} → ${latest!.config.vend.toFixed(2)} V at ${latest!.config.dischargeMA} mA, ${latest!.cycles.length} cycles)</span>`;
+    : `Latest estimate: <b>${est.toFixed(1)} mAh</b> <span class="note">(${latest!.config.vmax.toFixed(2)} → ${latest!.config.vend.toFixed(2)} V at ${latest!.config.dischargeMA} mA, ${doneCycles} cycles${caveat})</span>`;
 }
 
 // --- Config + wiring ---
@@ -404,6 +449,33 @@ function readConfig(): TestConfig {
   };
 }
 
+// Settings persist separately from test history, so "Clear session" wipes
+// data but keeps preferences.
+const LS_SETTINGS_KEY = 'm1k-battery-settings-v1';
+const CONFIG_INPUTS = [
+  'inp-cycles', 'inp-final', 'inp-ichg', 'inp-idis',
+  'inp-vmax', 'inp-vend', 'inp-cutoff', 'inp-vtol',
+];
+
+function saveSettings(): void {
+  const vals: Record<string, string> = {};
+  for (const id of CONFIG_INPUTS) {
+    vals[id] = el<HTMLInputElement | HTMLSelectElement>(id).value;
+  }
+  localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(vals));
+}
+
+function restoreSettings(): void {
+  try {
+    const vals = JSON.parse(localStorage.getItem(LS_SETTINGS_KEY) ?? '{}') as Record<string, string>;
+    for (const id of CONFIG_INPUTS) {
+      if (typeof vals[id] === 'string') {
+        el<HTMLInputElement | HTMLSelectElement>(id).value = vals[id];
+      }
+    }
+  } catch { /* defaults stand */ }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // A test that was 'running' when the page was last unloaded was interrupted
   let dirty = false;
@@ -416,6 +488,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (dirty) saveStore(store);
   renderHistory();
+
+  restoreSettings();
+  for (const id of CONFIG_INPUTS) {
+    el(id).addEventListener('change', saveSettings);
+  }
 
   el('btn-start').addEventListener('click', () => { void runTest(readConfig()); });
   el('btn-abort').addEventListener('click', () => { abortRequested = true; setState('aborting…'); });

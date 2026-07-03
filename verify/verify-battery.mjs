@@ -133,6 +133,13 @@ async function main() {
       est.capacity != null && est.capacity > 0.08 && est.capacity < 0.30,
       `${est.capacity?.toFixed(3)} mAh, rest OCV ${est.restV?.toFixed(3)} V`);
 
+    // Change a setting (with a real change event) — must survive the reload
+    await page.evaluate(() => {
+      const inp = document.getElementById('inp-cycles');
+      inp.value = '2';
+      inp.dispatchEvent(new Event('change'));
+    });
+
     // Persistence across reload
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitFor(page,
@@ -145,6 +152,17 @@ async function main() {
     const estimateShown = await page.evaluate(() =>
       document.getElementById('estimate').textContent.includes('mAh'));
     check('persistence: estimate rendered from stored data', estimateShown);
+
+    const settingsRestored = await page.evaluate(() =>
+      document.getElementById('inp-cycles').value === '2');
+    check('persistence: settings restored after reload', settingsRestored);
+
+    // Clear session must keep settings (it clears data, not preferences)
+    await page.click('#btn-clear');
+    const settingsKept = await page.evaluate(() =>
+      document.getElementById('inp-cycles').value === '2'
+      && localStorage.getItem('m1k-battery-settings-v1') !== null);
+    check('clear session keeps settings', settingsKept);
 
     // Clear session
     await page.click('#btn-clear');
