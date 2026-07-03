@@ -76,7 +76,36 @@ function log(msg: string, cls?: string): void {
   div.scrollIntoView({ block: 'nearest' });
 }
 
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+// Background tabs get their timers throttled (Chrome's intensive throttling
+// clamps page timers to once per MINUTE), which stretched the measurement
+// loop until sample windows went stale and the test died. Worker timers are
+// exempt, so all pacing sleeps are driven from a tiny dedicated worker.
+const tickWorker: Worker | null = (() => {
+  try {
+    const src = 'onmessage=(e)=>setTimeout(()=>postMessage(e.data.id),e.data.ms)';
+    return new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  } catch {
+    return null; // fall back to page timers
+  }
+})();
+
+let sleepSeq = 0;
+const sleepWaiters = new Map<number, () => void>();
+tickWorker?.addEventListener('message', (e: MessageEvent<number>) => {
+  const wake = sleepWaiters.get(e.data);
+  sleepWaiters.delete(e.data);
+  wake?.();
+});
+
+const sleep = (ms: number) => new Promise<void>((r) => {
+  if (!tickWorker) {
+    setTimeout(r, ms);
+    return;
+  }
+  const id = ++sleepSeq;
+  sleepWaiters.set(id, r);
+  tickWorker.postMessage({ id, ms });
+});
 
 // --- Device plumbing (mirrors m1k_calibrate) ---
 
@@ -259,6 +288,14 @@ async function phase(
     const now = performance.now();
     const dtH = (now - lastT) / 3600000;
     lastT = now;
+    // A monitoring gap (throttled/discarded tab, machine suspend) means the
+    // threshold checks didn't run for dtH while the mode kept driving. The
+    // constant-current integral over the gap is still correct (and CV only
+    // tapers), so count it — but flag it, since a threshold crossing inside
+    // the gap was seen late.
+    if (dtH > (10 * WINDOW_S) / 3600) {
+      log(`⚠ ${Math.round(dtH * 3600)} s monitoring gap — thresholds checked late; keep this page visible (own window) or exempt it from the browser's memory saver`, 'log-err');
+    }
     mah += i * dtH;
 
     chartData.push({ t: now, v, i });
