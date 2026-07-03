@@ -141,19 +141,41 @@ function measure(seconds = WINDOW_S): Promise<{ v: number; i: number }> {
   });
 }
 
-// measure() with garbage rejection: the Connect (WebSocket) backend encodes
-// NaN samples as JSON null, and a system sleep / USB suspend stalls capture
-// and produces exactly that. Invalid windows are transient — retry a few
-// times before declaring the test dead.
-async function measureValid(seconds = WINDOW_S, attempts = 5): Promise<{ v: number; i: number }> {
+// measure() with garbage rejection AND capture recovery. The Connect
+// (WebSocket) backend encodes NaN samples as JSON null; listeners return
+// exactly that when the device's capture has stalled (USB hiccup, suspend,
+// capture left paused). Plain retries can't fix a stalled capture, so the
+// ladder escalates: retry → restart capture → reconfigure + restart.
+// `reapply` re-asserts the caller's drive mode after a reconfigure, which
+// resets outputs — a charge phase must not be left un-driven.
+async function measureValid(
+  seconds = WINDOW_S,
+  reapply?: () => Promise<void>,
+  attempts = 6,
+): Promise<{ v: number; i: number }> {
   for (let a = 1; ; a++) {
     const { v, i } = await measure(seconds);
     if (Number.isFinite(v) && Number.isFinite(i)) return { v, i };
     if (a >= attempts) {
       throw new TestAborted('error',
-        'no valid samples from the device — did the computer sleep? (capture stalls on suspend)');
+        'no valid samples from the device after capture-restart attempts — check USB/nonolith-connect');
     }
     log(`invalid sample window (v=${String(v)}, i=${String(i)}) — retrying ${a}/${attempts - 1}`, 'log-err');
+
+    if (device && a >= 2 && !device.captureState) {
+      log('capture is paused — restarting it', 'log-err');
+      device.startCapture();
+      await sleep(1500);
+      await reapply?.();
+    } else if (device && a >= 4) {
+      // Capture claims to run but yields no data: reconfigure from scratch.
+      // configure() resets outputs to 0, hence the reapply.
+      log('capture running but yielding no data — reconfiguring device', 'log-err');
+      device.configure({});
+      device.startCapture();
+      await sleep(1500);
+      await reapply?.();
+    }
     await sleep(1000);
   }
 }
@@ -284,7 +306,7 @@ async function phase(
   const phaseStart = lastT;
   for (;;) {
     checkAbort();
-    const { v, i } = await measureValid();
+    const { v, i } = await measureValid(WINDOW_S, apply);
     const now = performance.now();
     const dtH = (now - lastT) / 3600000;
     lastT = now;
@@ -350,7 +372,7 @@ async function runTest(cfg: TestConfig): Promise<void> {
     await setMode('a', HI_Z);
     setState('checking cell');
     await sleep(500);
-    const { v: ocv } = await measureValid();
+    const { v: ocv } = await measureValid(WINDOW_S, () => setMode('a', HI_Z));
     log(`Open-circuit voltage: ${ocv.toFixed(3)} V`);
     if (ocv < 2.8 || ocv > cfg.vmax + 0.05) {
       throw new TestAborted('error',
@@ -369,7 +391,7 @@ async function runTest(cfg: TestConfig): Promise<void> {
       await setMode('a', HI_Z);
       await sleep(REST_S * 1000);
       checkAbort();
-      const { v: restV } = await measureValid();
+      const { v: restV } = await measureValid(WINDOW_S, () => setMode('a', HI_Z));
       cycle.restV = restV;
       log(`cycle ${c + 1}: rest OCV ${restV.toFixed(3)} V`);
       if (Math.abs(restV - cfg.vmax) > cfg.vtolMV / 1000) {
@@ -568,6 +590,12 @@ function onDeviceReady(dev: CEEDevice): void {
 
   if (deviceInitialized) return;
   deviceInitialized = true;
+
+  // Diagnostic breadcrumb: a capture stall mid-test is otherwise invisible
+  // until measurement windows come back null.
+  dev.captureStateChanged.subscribe((s: boolean) => {
+    if (running) log(`capture state changed: ${s ? 'running' : 'PAUSED'}`, s ? undefined : 'log-err');
+  });
 
   if (!dev.captureState) {
     dev.configure({});
