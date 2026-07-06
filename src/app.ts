@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   initSession({
     app: 'Pixelpulse',
-    model: ['com.nonolithlabs.cee', 'com.analogdevices.m1k'],
+    model: ['com.nonolithlabs.cee', 'com.analogdevices.m1k', 'org.pixelpulse.audio'],
     updateMessage: "You're missing <a href='http://www.nonolithlabs.com/blog/2012/09-19-software-features'>new features</a>",
 
     reset() {

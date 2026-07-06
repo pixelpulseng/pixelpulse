@@ -863,13 +863,15 @@ export function setLayout(l: number): void {
   document.body.classList.add(`layout-${l}side`);
 
   if (sidegraph1 && sidegraph2) {
-    if (l >= 1) {
+    // Devices expose 2–4 streams (the audio backend has only Out + In);
+    // a side graph without a stream pair for its default axes stays hidden.
+    if (l >= 1 && streams[1]) {
       sidegraph1.configure(streams[0], streams[1]);
     } else {
       sidegraph1.hidden();
     }
 
-    if (l >= 2) {
+    if (l >= 2 && streams[3]) {
       sidegraph2.configure(streams[2], streams[3]);
     } else {
       sidegraph2.hidden();

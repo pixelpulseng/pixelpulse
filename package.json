@@ -7,7 +7,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "verify": "node verify/verify.mjs",
-    "verify:battery": "node verify/verify-battery.mjs"
+    "verify:battery": "node verify/verify-battery.mjs",
+    "verify:audio": "node verify/verify-audio.mjs"
   },
   "repository": {
     "type": "git",

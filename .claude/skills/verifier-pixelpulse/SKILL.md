@@ -16,7 +16,8 @@ are exercised.
 ```bash
 # dev server must be running (npm run dev, default port 8000)
 npm run verify              # main pixelpulse UI (17 checks)
-npm run verify:battery      # LiPo capacity-test applet (12 checks, ~1 min)
+npm run verify:battery      # LiPo capacity-test applet (14 checks, ~1 min)
+npm run verify:audio        # speaker/mic backend (#audio) via Chromium fake media
 node verify/verify.mjs --headed         # watch it drive
 node verify/verify.mjs --url http://localhost:5173   # other port
 ```

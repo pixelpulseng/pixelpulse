@@ -22,6 +22,7 @@ import { Dataserver } from './dataserver-common.js';
 import { WSDataserver } from './dataserver-ws.js';
 import { USBDataserver } from './dataserver-webusb.js';
 import { SimDataserver } from './dataserver-sim.js';
+import { AudioDataserver } from './dataserver-audio.js';
 
 export * from './dataserver-common.js';
 
@@ -32,7 +33,8 @@ export function webusbSupported(): boolean {
 export type BackendChoice =
   | { kind: 'webusb' }
   | { kind: 'websocket'; host: string }
-  | { kind: 'sim' };
+  | { kind: 'sim' }
+  | { kind: 'audio' };
 
 export function chooseBackend(): BackendChoice {
   if (typeof location !== 'undefined') {
@@ -44,6 +46,9 @@ export function chooseBackend(): BackendChoice {
 
     // Simulated M1K (software LED/resistor loads): hardware-free testing
     if (/(?:^#|&)sim(?:&|$)/.test(location.hash)) return { kind: 'sim' };
+
+    // Speaker/mic as the instrument (soundcard scope + signal generator)
+    if (/(?:^#|&)audio(?:&|$)/.test(location.hash)) return { kind: 'audio' };
   }
 
   if (isSupported()) return { kind: 'webusb' };
@@ -55,7 +60,8 @@ export const backend: BackendChoice = chooseBackend();
 export const server: Dataserver =
   backend.kind === 'websocket' ? new WSDataserver(backend.host)
     : backend.kind === 'sim' ? new SimDataserver()
-      : new USBDataserver();
+      : backend.kind === 'audio' ? new AudioDataserver()
+        : new USBDataserver();
 
 console.log(
   backend.kind === 'websocket'

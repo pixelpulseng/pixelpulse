@@ -501,7 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   initSession({
     app: 'Pixelpulse DSA',
-    model: ['com.nonolithlabs.cee', 'com.analogdevices.m1k'],
+    model: ['com.nonolithlabs.cee', 'com.analogdevices.m1k', 'org.pixelpulse.audio'],
     updateMessage: 'This app may not work with older versions',
 
     reset: () => {
