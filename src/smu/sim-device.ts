@@ -33,9 +33,11 @@ const SVMI = 1;
 const SIMV = 2;
 
 // LED model: I = IS * (exp(V / (N * VT)) - 1). IS/N picked for a red-LED-ish
-// ~2.2 V drop at 20 mA.
-const LED_IS = 1e-20; // A
-const LED_NVT = 2 * 0.02585; // N * thermal voltage, V
+// ~2.2 V drop at 20 mA, with a deliberately high ideality (n=4, ~240 mV per
+// decade of current) so the knee reads as a shallow curve at plotting scale
+// — like a real LED at its terminals — rather than a vertical wall.
+const LED_IS = 1e-11; // A
+const LED_NVT = 4 * 0.02585; // N * thermal voltage, V
 
 // Channel B load: R ohms from the pin to the 2.5 V rail.
 const B_RAIL = 2.5; // V
