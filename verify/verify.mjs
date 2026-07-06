@@ -264,6 +264,23 @@ async function main() {
     await page.keyboard.press('Space'); // restore
 
     await page.screenshot({ path: join(OUT_DIR, '4-final.png') });
+
+    // --- No-device state: backend chooser must stay usable ---
+    // Plain load (WebUSB backend, headless = no device) shows the error
+    // overlay; the toolbar must sit above it so the user can switch backends.
+    const page2 = await browser.newPage();
+    await page2.goto(`${BASE_URL}/pixelpulse.html`, { waitUntil: 'domcontentloaded' });
+    await new Promise((r) => setTimeout(r, 1000));
+    check('no-device: backend dropdown clickable above error overlay',
+      await page2.evaluate(() => {
+        const sel = document.getElementById('backend-select');
+        if (!sel) return false;
+        const r = sel.getBoundingClientRect();
+        if (r.width === 0) return false;
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit === sel;
+      }));
+    await page2.close();
   } finally {
     await browser.close();
   }
