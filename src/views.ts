@@ -35,6 +35,10 @@ export const captureState = new TypedEvent<[boolean]>();
 export const layoutChanged = new TypedEvent();
 export const triggeringChanged = new TypedEvent<[boolean]>();
 
+// Keep the overlay's trigger-level line in sync when triggering is toggled
+// or reconfigured from the stacked view.
+triggeringChanged.subscribe(() => overlayGraph?.updateTrigger());
+
 export let timeseries: TimeseriesGraphListener;
 export let meterListener: Listener;
 export let streams: Stream[] = [];
@@ -247,7 +251,11 @@ export function setOverlay(enabling: boolean): void {
   // Whichever view just became visible was display:none and so has a stale,
   // zero-size canvas; notify layout to resize and redraw both directions.
   layoutChanged.notify();
-  if (overlayMode) overlayGraph?.lg.needsRedraw(true);
+  if (overlayMode) {
+    overlayGraph?.lg.needsRedraw(true);
+    // Trigger may have been (re)configured while the overlay was hidden
+    overlayGraph?.updateTrigger();
+  }
 }
 
 export function toggleOverlay(): void {

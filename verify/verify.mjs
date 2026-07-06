@@ -169,6 +169,19 @@ async function main() {
     await new Promise((r) => setTimeout(r, 800));
     await page.screenshot({ path: join(OUT_DIR, '2-overlay.png') });
 
+    // Triggering in overlay mode: the trigger-level line (TriggerOverlay's
+    // 10px triangle canvas) must appear on the overlay graph and track state
+    await page.click('#triggerbtn');
+    check('overlay: trigger line appears when triggering enabled',
+      await waitFor(page,
+        () => !!document.querySelector('#overlay-graph div > canvas[width="10"]'),
+        'trigger overlay element'));
+    await page.click('#triggerbtn');
+    check('overlay: trigger line removed when triggering disabled',
+      await waitFor(page,
+        () => !document.querySelector('#overlay-graph div > canvas[width="10"]'),
+        'trigger overlay removed'));
+
     // --- Export popup + targets ---
     await page.click('#download-btn');
     check('export: popup opens',

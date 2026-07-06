@@ -719,8 +719,9 @@ export class OverlayGraph {
   lg: GraphCanvas;
   traces: OverlayTrace[] = [];
   private yaxis: Axis;
-  private timeseries: TimeseriesGraphListener;
+  readonly timeseries: TimeseriesGraphListener;
   private _layoutChanged: TypedEvent;
+  private triggerOverlay: TriggerOverlay | null = null;
 
   constructor(
     public el: HTMLElement,
@@ -747,6 +748,15 @@ export class OverlayGraph {
     const xTargets = (): GraphCanvas[] => [this.lg, ...timeseries.graphs];
     this.lg.onResized = () => timeseries.queueWindowUpdate();
     this.lg.onClick = (pos): void => {
+      // Left edge = trigger-level drag (mirrors the stacked graphs). The
+      // level maps through the trigger trace's divisions transform.
+      if (pos[0] < 45 && timeseries.trigger) {
+        const trace = this.triggerTrace();
+        if (trace) {
+          new OverlayDragTriggerAction(this, trace, pos);
+          return;
+        }
+      }
       if (timeseries.canChangeView()) {
         new DragScrollAction(this.lg, pos, xTargets());
       }
@@ -794,7 +804,36 @@ export class OverlayGraph {
       t.series.color = t.color;
     }
     this.lg.series = active.map(t => t.series);
+    this.updateTrigger();
     this.lg.needsRedraw(true);
+  }
+
+  // The enabled trace whose stream the trigger listens on; falls back to the
+  // first enabled trace (dragging will move the trigger to that stream, the
+  // same way dragging a different stacked graph's edge switches it).
+  triggerTrace(): OverlayTrace | undefined {
+    const trig = this.timeseries.trigger;
+    if (!trig) return undefined;
+    return this.traces.find(t => t.enabled && t.stream === trig.stream)
+      ?? this.traces.find(t => t.enabled);
+  }
+
+  // Show/position the trigger-level line, mapping the trigger's level (in
+  // its stream's units) onto the divisions axis via that stream's trace.
+  updateTrigger(): void {
+    const trig = this.timeseries.trigger;
+    const trace = trig
+      ? this.traces.find(t => t.enabled && t.stream === trig.stream)
+      : undefined;
+
+    if (!trig || !trace) {
+      this.triggerOverlay?.remove();
+      this.triggerOverlay = null;
+      return;
+    }
+
+    this.triggerOverlay ??= new TriggerOverlay(this.lg);
+    this.triggerOverlay.position(trig.level / trace.perDiv + trace.position);
   }
 
   setEnabled(stream: Stream, enabled: boolean): void {
@@ -823,6 +862,41 @@ export class OverlayGraph {
   hidden(): void {
     this.timeseries.updated.unListen(this.updated);
     this._layoutChanged.unListen(this.relayout);
+    this.triggerOverlay?.remove();
+    this.triggerOverlay = null;
+  }
+}
+
+// Trigger-level drag on the overlay graph: pixels → divisions (graph axes)
+// → stream units (through the trace's perDiv/position).
+class OverlayDragTriggerAction extends Action {
+  private transformData: ReturnType<typeof makeTransform>;
+  private lastLevel: number;
+
+  constructor(
+    private og: OverlayGraph,
+    private trace: OverlayTrace,
+    pos: [number, number],
+  ) {
+    super(og.lg, pos);
+    og.lg.startDrag(pos);
+    this.transformData = makeTransform(og.lg.geom, og.lg.xaxis, og.lg.yaxis);
+    this.lastLevel = og.timeseries.trigger ? og.timeseries.trigger.level : 0;
+    this.onDrag(pos);
+  }
+
+  override onDrag(pos: [number, number]): void {
+    const [, div] = invTransform(pos[0], pos[1], this.transformData);
+    const s = this.trace.stream;
+    const level = (div - this.trace.position) * this.trace.perDiv;
+    this.lastLevel = Math.min(Math.max(level, s.min), s.max);
+    this.og.timeseries.dragTrigger(s, this.lastLevel);
+    this.og.updateTrigger();
+  }
+
+  override onRelease(): void {
+    this.og.timeseries.setTrigger(this.trace.stream, this.lastLevel);
+    this.og.updateTrigger();
   }
 }
 
