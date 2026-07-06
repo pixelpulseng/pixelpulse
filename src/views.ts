@@ -7,7 +7,7 @@
 
 import {
   type CEEDevice, type Channel, type Stream, type OutputSource, type UpdateMessage,
-  Listener, DataListener, server,
+  Listener, DataListener, server, backend,
 } from './dataserver.js';
 import { AXIS_SPACING, type GraphCanvas } from './livegraph.js';
 import { unitPrefixScale } from './human-units.js';
@@ -951,6 +951,21 @@ function snapshotTargets(): SnapshotTarget[] {
 // --- Document ready setup ---
 
 export function setupToolbar(): void {
+  // Backend chooser: the backend binds at module load, so switching is
+  // "rewrite the hash, reload". Unrelated hash flags (perfstat, ...) are
+  // preserved; backend tokens (connect/sim/audio and sim params) replaced.
+  const backendSel = document.getElementById('backend-select') as HTMLSelectElement | null;
+  if (backendSel) {
+    backendSel.value = backend.kind === 'websocket' ? 'connect' : backend.kind;
+    backendSel.addEventListener('change', () => {
+      const keep = location.hash.slice(1).split('&').filter(f =>
+        f && !/^(connect(=.*)?|sim|audio|bat=.*)$/.test(f));
+      if (backendSel.value !== 'webusb') keep.unshift(backendSel.value);
+      location.hash = keep.join('&');
+      location.reload();
+    });
+  }
+
   // Config popup
   const configBtn = document.getElementById('device-config');
   const configPopup = document.getElementById('config-popup');

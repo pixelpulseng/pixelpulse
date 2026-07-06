@@ -114,6 +114,9 @@ async function main() {
     // Let the sim stream for a moment so traces have content
     await new Promise((r) => setTimeout(r, 1500));
 
+    check('boot: backend dropdown reflects active backend (sim)',
+      await page.evaluate(() => document.getElementById('backend-select')?.value === 'sim'));
+
     // --- Default layout ---
     check('default: stacked view visible, overlay pane hidden',
       await page.evaluate(() =>

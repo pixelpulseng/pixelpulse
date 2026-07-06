@@ -76,6 +76,12 @@ Run <code>sudo /etc/init.d/nonolith-connect start</code> in a terminal to start 
     <button id="m1k-extras" title="Input termination &amp; bus power" style="display:none">+</button>
   </div>
   <div id="device-info">
+    <select id="backend-select" title="Device backend (reloads the page)">
+      <option value="webusb">WebUSB</option>
+      <option value="connect">Connect</option>
+      <option value="audio">Audio (mic/spk)</option>
+      <option value="sim">Demo (sim)</option>
+    </select>
     <button id="switchDev">Switch</button>
   </div>
 </div>
