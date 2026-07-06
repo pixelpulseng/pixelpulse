@@ -265,6 +265,53 @@ async function main() {
 
     await page.screenshot({ path: join(OUT_DIR, '4-final.png') });
 
+    // --- Share-state: capture into URL, restore from URL ---
+    // Share button copies a link; the live hash should carry our state tokens.
+    await page.evaluate(() => { document.getElementById('share-btn').click(); });
+    await new Promise((r) => setTimeout(r, 300));
+    const shareHash = await page.evaluate(() => location.hash);
+    check('share: button writes state tokens into the hash (keeps #sim)',
+      /(^#|&)sim(&|$)/.test(shareHash) && /(^#|&)sr=/.test(shareHash),
+      shareHash);
+
+    // Build a share link by hand and verify a fresh load restores it. Overlay
+    // on, phosphor off, trigger on stream 0 @ 1.25 V, x window -3..0, and
+    // channel A sourcing 2.5 V (SVMI) — the output must be HELD (not driven)
+    // until Start, so the app must open paused with body.outputs-pending.
+    const shareLink = `${BASE_URL}/pixelpulse.html#sim&ov=1&ph=0`
+      + `&trig=0,1.25&x=-3,0&a=1,constant,2.5`;
+    const page3 = await browser.newPage();
+    await page3.goto(shareLink, { waitUntil: 'domcontentloaded' });
+    await waitFor(page3,
+      () => document.querySelectorAll('#streams section.channel').length === 2,
+      'shared device view');
+    await new Promise((r) => setTimeout(r, 500));
+
+    check('share restore: opens paused (no streaming until preview)',
+      await page3.evaluate(() => !document.body.classList.contains('capturing')));
+
+    check('share restore: overlay mode on, phosphor off',
+      await page3.evaluate(() =>
+        document.body.classList.contains('overlay-mode')
+        && !document.body.classList.contains('phosphor-mode')));
+
+    check('share restore: triggering enabled from link',
+      await page3.evaluate(() => document.body.classList.contains('triggering')));
+
+    check('share restore: channel output staged but held Hi-Z (not driving)',
+      await page3.evaluate(() => document.body.classList.contains('outputs-pending')));
+
+    // Pressing Start applies the held output and begins capture.
+    await page3.click('#startpause');
+    await new Promise((r) => setTimeout(r, 600));
+    check('share restore: Start applies held output and begins capture',
+      await page3.evaluate(() =>
+        document.body.classList.contains('capturing')
+        && !document.body.classList.contains('outputs-pending')));
+
+    await page3.screenshot({ path: join(OUT_DIR, '5-shared-link.png') });
+    await page3.close();
+
     // --- No-device state: backend chooser must stay usable ---
     // Plain load (WebUSB backend, headless = no device) shows the error
     // overlay; the toolbar must sit above it so the user can switch backends.

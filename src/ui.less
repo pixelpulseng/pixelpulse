@@ -265,6 +265,19 @@ body.os-mac .osspec.mac{
 		background: -webkit-linear-gradient(270deg, rgba(255, 200, 200, 0.25) 0%, rgba(255, 128, 128, 0.35) 100%), url('img/pause.png');
 		background: -moz-linear-gradient(270deg, rgba(255, 200, 200, 0.25) 0%, rgba(255, 128, 128, 0.35) 100%), url('img/pause.png');
 	}
+
+	// Brief confirmation flash after copying a share link.
+	#share-btn.copied{
+		color: #8f8;
+		border-color: #6c6;
+	}
+
+	// A shared link's outputs are staged but not driven until the first Start;
+	// nudge the Start button so the user knows current is one click away.
+	body.outputs-pending & #startpause{
+		box-shadow: 0 0 0 2px rgba(255, 200, 80, 0.8);
+		border-radius: 3px;
+	}
 }
 
 .channel h1{

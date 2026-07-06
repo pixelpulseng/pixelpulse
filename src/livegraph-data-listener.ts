@@ -65,6 +65,10 @@ export class TimeseriesGraphListener extends DataListener {
   triggerOverlay: TriggerOverlay | null = null;
   private updatePending = false;
   phosphorRaw = false; // true: request undecimated samples for density rendering
+  // Optional observer for x-axis window changes (used to keep the shareable
+  // URL in sync). Set by views.ts; kept as a plain callback to avoid a
+  // layering dependency on share-state here.
+  onWindowChanged: (() => void) | null = null;
 
   constructor(device: CEEDevice, streams: Stream[], graphs: TimeseriesGraph[] = []) {
     super(device, streams);
@@ -118,6 +122,7 @@ export class TimeseriesGraphListener extends DataListener {
 
   private checkWindowChange = (min: number, max: number, _done?: boolean, target?: [number, number]): void => {
     const lg = this.graphs[0];
+    this.onWindowChanged?.();
 
     if (target) {
       if ((target[1] - target[0]) < 0.5 * (max - min)) return;

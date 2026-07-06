@@ -15,7 +15,7 @@ are exercised.
 
 ```bash
 # dev server must be running (npm run dev, default port 8000)
-npm run verify              # main pixelpulse UI (17 checks)
+npm run verify              # main pixelpulse UI (27 checks)
 npm run verify:battery      # LiPo capacity-test applet (14 checks, ~1 min)
 npm run verify:audio        # speaker/mic backend (#audio) via Chromium fake media
 node verify/verify.mjs --headed         # watch it drive
@@ -36,7 +36,21 @@ node verify/verify.mjs --url http://localhost:5173   # other port
 Boot + device init, Start button, stacked layout default, phosphor pixels
 rendering, overlay mode (rows/defaults/readouts/dropdown integrity), export
 popup targets (incl. overlay only-when-enabled), PNG snapshot download +
-decode, Configure popup closes on Apply, spacebar start/pause.
+decode, Configure popup closes on Apply, spacebar start/pause, and
+shareable-state URLs (Share button writes tokens; a hand-built link restores
+overlay/phosphor/trigger and holds channel outputs Hi-Z until Start).
+
+## Shareable state (URL params)
+
+`src/share-state.ts` serializes UI/device state into hash tokens after the
+backend flags: `layout`, `sg1`/`sg2` (side-graph stream indices), `ov` +
+`ov<i>` (overlay traces: perDiv,pos,enabled), `ph=0`, `trig=streamIdx,level`,
+`x=min,max`, `sr=sampleTime`, and per-channel `a=`/`b=` output source
+(`mode,constant,value` or `mode,shape,offset,amplitude,period`). The URL bar
+stays live (debounced `history.replaceState`); the Share button copies it.
+Restore is safe: the app opens paused and channel outputs are held Hi-Z
+(`body.outputs-pending`) until the first Start — a link never drives current
+during preview. Defaults are omitted (phosphor-on, Hi-Z, -10..0 window).
 
 ## Battery applet
 

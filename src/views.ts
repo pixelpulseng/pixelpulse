@@ -19,6 +19,9 @@ import { numberWidget, selectDropdown, btnPopup, waveformIconBar, type NumberWid
 import { downloadCSV, snapshotPNG } from './export.js';
 import { TypedEvent } from './dataserver.js';
 import { readVBUS } from './m1k-power.js';
+import {
+  bindShareState, scheduleCapture, parseRestorePlan, hasShareState, shareUrl,
+} from './share-state.js';
 
 // --- Colors ---
 
@@ -39,6 +42,11 @@ export const triggeringChanged = new TypedEvent<[boolean]>();
 // or reconfigured from the stacked view.
 triggeringChanged.subscribe(() => overlayGraph?.updateTrigger());
 
+// Keep the shareable URL in sync with layout/overlay/trigger changes. Reads
+// are debounced (share-state.ts), so subscribing to noisy events is cheap.
+layoutChanged.subscribe(() => scheduleCapture());
+triggeringChanged.subscribe(() => scheduleCapture());
+
 export let timeseries: TimeseriesGraphListener;
 export let meterListener: Listener;
 export let streams: Stream[] = [];
@@ -49,6 +57,56 @@ let sidegraph2: XYGraphView;
 let overlayGraph: OverlayGraph | null = null;
 let overlayMode = false;
 let currentLayout = 0; // # of side-graph panes shown (0/1/2)
+
+// Channel outputs from a shared link are held here and applied Hi-Z-safe on
+// the first Start, so opening a link never drives current during preview.
+let pendingOutputs: Map<string, OutputSource> | null = null;
+
+// --- Shareable-state API (consumed by share-state.ts) ---
+
+export interface ShareStateApi {
+  getLayout(): number;
+  getSideGraphs(): ({ x: number; y: number; isDefault: boolean } | null)[];
+  getOverlayMode(): boolean;
+  getOverlayTraces(): { index: number; perDiv: number; position: number; enabled: boolean }[];
+  getPhosphor(): boolean;
+  getTrigger(): { streamIndex: number; level: number } | null;
+  getXWindow(): { min: number; max: number } | null;
+}
+
+const shareApi: ShareStateApi = {
+  getLayout: () => currentLayout,
+  getSideGraphs: () => {
+    const one = (sg: XYGraphView | undefined, dx: number, dy: number) => {
+      if (!sg?.xstream || !sg?.ystream) return null;
+      const x = streams.indexOf(sg.xstream);
+      const y = streams.indexOf(sg.ystream);
+      if (x < 0 || y < 0) return null;
+      return { x, y, isDefault: x === dx && y === dy };
+    };
+    return [one(sidegraph1, 0, 1), one(sidegraph2, 2, 3)];
+  },
+  getOverlayMode: () => overlayMode,
+  getOverlayTraces: () => (overlayGraph?.traces ?? []).map(t => ({
+    index: streams.indexOf(t.stream),
+    perDiv: t.perDiv,
+    position: t.position,
+    enabled: t.enabled,
+  })).filter(t => t.index >= 0),
+  getPhosphor: () => !!timeseries?.graphs[0]?.phosphorEnabled,
+  getTrigger: () => {
+    const trig = timeseries?.trigger;
+    if (!trig) return null;
+    const streamIndex = streams.indexOf(trig.stream);
+    if (streamIndex < 0) return null;
+    return { streamIndex, level: trig.level };
+  },
+  getXWindow: () => {
+    const ax = timeseries?.xaxis;
+    if (!ax) return null;
+    return { min: ax.visibleMin, max: ax.visibleMax };
+  },
+};
 
 // --- Init view ---
 
@@ -66,6 +124,7 @@ export function initView(dev: CEEDevice): void {
   meterListener.configure();
 
   timeseries = new TimeseriesGraphListener(dev, streams);
+  timeseries.onWindowChanged = () => scheduleCapture();
   timeseries.queueWindowUpdate();
 
   let i = 0;
@@ -74,6 +133,8 @@ export function initView(dev: CEEDevice): void {
     const cv = new ChannelView(channel, i++);
     channelviews.push(cv);
     streamsEl.appendChild(cv.el);
+    // Reflect manual output edits (mode/setpoint/waveform) in the share URL.
+    channel.outputChanged.subscribe(() => scheduleCapture());
   }
 
   sidegraph1 = new XYGraphView(
@@ -109,6 +170,86 @@ export function initView(dev: CEEDevice): void {
   }
 
   meterListener.submit();
+
+  // Apply a shared configuration from the URL, if present, then start keeping
+  // the URL in sync with live changes.
+  bindShareState(shareApi);
+  restoreShareState(dev);
+}
+
+// Apply a shared-link configuration. View settings are applied immediately;
+// channel outputs are stashed in `pendingOutputs` and applied on first Start
+// (the app boots paused), so a shared link never drives current during
+// preview. See share-state.ts.
+function restoreShareState(dev: CEEDevice): void {
+  if (!hasShareState()) return;
+  const plan = parseRestorePlan();
+
+  if (plan.sampleTime != null && plan.sampleTime !== dev.sampleTime) {
+    dev.configure({ sampleTime: plan.sampleTime });
+  }
+
+  if (plan.layout != null) setLayout(plan.layout);
+  for (const sg of plan.sideGraphs) {
+    const view = sg.slot === 1 ? sidegraph1 : sidegraph2;
+    const xs = streams[sg.x];
+    const ys = streams[sg.y];
+    if (view && xs && ys) view.configure(xs, ys);
+  }
+
+  if (plan.phosphor === false) setPhosphor(false);
+
+  if (plan.overlay) setOverlay(true);
+  if (overlayGraph) {
+    for (const t of plan.overlayTraces) {
+      const s = streams[t.index];
+      if (!s) continue;
+      overlayGraph.setPerDiv(s, t.perDiv);
+      overlayGraph.setPosition(s, t.position);
+      overlayGraph.setEnabled(s, t.enabled);
+    }
+    buildOverlayControls();
+  }
+
+  if (plan.trigger) {
+    const s = streams[plan.trigger.streamIndex];
+    if (s) {
+      if (!timeseries.isTriggerEnabled()) toggleTrigger();
+      timeseries.setTrigger(s, plan.trigger.level);
+      triggeringChanged.notify(true);
+    }
+  }
+
+  if (plan.xWindow && !timeseries.isTriggerEnabled()) {
+    timeseries.goToWindow(plan.xWindow.min, plan.xWindow.max, false);
+  }
+
+  // Hold outputs until the user presses Start (see applyPendingOutputs).
+  if (plan.channelOutputs.size > 0) {
+    pendingOutputs = plan.channelOutputs;
+    document.body.classList.add('outputs-pending');
+    const startBtn = document.getElementById('startpause');
+    if (startBtn) startBtn.title = 'Start — applies the shared output settings (drives current)';
+  }
+
+  // Snapshot the applied state back into the hash (normalizes / drops
+  // defaults) so the URL is canonical from the first load.
+  scheduleCapture();
+}
+
+// Apply any deferred shared-link outputs to the device. Called once, when the
+// user first starts capture — this is the moment current is allowed to flow.
+function applyPendingOutputs(): void {
+  if (!pendingOutputs) return;
+  const dev = server.device as CEEDevice | null;
+  if (dev) {
+    for (const ch of Object.values(dev.channels) as Channel[]) {
+      const src = pendingOutputs.get(ch.id);
+      if (src) ch.setDirect({ ...src });
+    }
+  }
+  pendingOutputs = null;
+  document.body.classList.remove('outputs-pending');
 }
 
 // The time-axis labels are drawn by exactly one graph (showXbottom).
@@ -188,7 +329,10 @@ function buildOverlayControls(): void {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = t.enabled;
-    cb.addEventListener('change', () => overlayGraph!.setEnabled(t.stream, cb.checked));
+    cb.addEventListener('change', () => {
+      overlayGraph!.setEnabled(t.stream, cb.checked);
+      scheduleCapture();
+    });
 
     const label = document.createElement('label');
     label.className = 'overlay-name';
@@ -210,7 +354,10 @@ function buildOverlayControls(): void {
       if (step === t.perDiv) opt.selected = true;
       perDiv.appendChild(opt);
     }
-    perDiv.addEventListener('change', () => overlayGraph!.setPerDiv(t.stream, parseFloat(perDiv.value)));
+    perDiv.addEventListener('change', () => {
+      overlayGraph!.setPerDiv(t.stream, parseFloat(perDiv.value));
+      scheduleCapture();
+    });
 
     const pos = document.createElement('input');
     pos.type = 'range';
@@ -228,6 +375,7 @@ function buildOverlayControls(): void {
       const p = parseFloat(pos.value);
       posVal.textContent = fmtPos(p);
       overlayGraph!.setPosition(t.stream, p);
+      scheduleCapture();
     });
 
     const posRow = document.createElement('div');
@@ -282,6 +430,7 @@ export function setPhosphor(enabling: boolean): void {
 
   btn?.classList.toggle('active', enabling);
   document.body.classList.toggle('phosphor-mode', enabling);
+  scheduleCapture();
 }
 
 function updatePhosphorAccumulate(): void {
@@ -974,6 +1123,29 @@ export function setupToolbar(): void {
     });
   }
 
+  // Share button: copy a link reproducing the current configuration.
+  const shareBtn = document.getElementById('share-btn');
+  if (shareBtn) {
+    const defaultTitle = shareBtn.getAttribute('title') ?? 'Share';
+    shareBtn.addEventListener('click', async () => {
+      const url = shareUrl();
+      let ok = true;
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        ok = false;
+      }
+      shareBtn.classList.add('copied');
+      shareBtn.textContent = ok ? 'Copied!' : 'Copy failed';
+      if (!ok) shareBtn.title = url; // let the user copy it manually
+      setTimeout(() => {
+        shareBtn.classList.remove('copied');
+        shareBtn.textContent = 'Share';
+        shareBtn.title = defaultTitle;
+      }, 1500);
+    });
+  }
+
   // Config popup
   const configBtn = document.getElementById('device-config');
   const configPopup = document.getElementById('config-popup');
@@ -1057,6 +1229,7 @@ export function setupToolbar(): void {
       (document.getElementById('config-sample-rate') as HTMLSelectElement).value,
     );
     (server.device as CEEDevice).configure({ sampleTime: rate });
+    scheduleCapture();
   });
 
   // Export popup: CSV download or PNG snapshot of a chosen graph
@@ -1153,6 +1326,7 @@ export function setupToolbar(): void {
     if (dev.captureState) {
       dev.pauseCapture();
     } else {
+      applyPendingOutputs();
       dev.startCapture();
     }
   };
