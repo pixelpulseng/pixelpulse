@@ -185,7 +185,12 @@ function restoreShareState(dev: CEEDevice): void {
   if (!hasShareState()) return;
   const plan = parseRestorePlan();
 
-  if (plan.sampleTime != null && plan.sampleTime !== dev.sampleTime) {
+  // Only reconfigure if the requested rate differs meaningfully. Devices with
+  // a fixed clock (audio: sampleTime pinned to the AudioContext rate) report a
+  // value the link can't change; a tolerant compare avoids a pointless
+  // reconfigure/capture-reset from float rounding in the URL.
+  if (plan.sampleTime != null
+    && Math.abs(plan.sampleTime - dev.sampleTime) > 1e-4 * dev.sampleTime) {
     dev.configure({ sampleTime: plan.sampleTime });
   }
 
@@ -220,7 +225,10 @@ function restoreShareState(dev: CEEDevice): void {
     }
   }
 
-  if (plan.xWindow && !timeseries.isTriggerEnabled()) {
+  // Restore the visible window last, after triggering (which resets the axis
+  // limits). goToWindow clamps to the current scroll bounds, so a tight
+  // triggered zoom (e.g. ±10 ms) is honored within the trigger's ±1 s limits.
+  if (plan.xWindow) {
     timeseries.goToWindow(plan.xWindow.min, plan.xWindow.max, false);
   }
 

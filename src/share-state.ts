@@ -85,7 +85,10 @@ function serializeSource(src: OutputSource): string | null {
   const mode = typeof src.mode === 'string'
     ? (src.mode === 'SVMI' ? 1 : src.mode === 'SIMV' ? 2 : 0)
     : src.mode;
-  if (!mode) return null; // Hi-Z (0) is the default — don't serialize.
+  // Only driving modes are worth sharing: Hi-Z (0) is the default, and
+  // negative modes are sentinels for non-source channels (e.g. the audio
+  // mic's -1 "measurement only" marker) that must never be re-applied.
+  if (mode == null || mode < 1) return null;
 
   if (src.source === 'constant') {
     return `${mode},constant,${num(src.value ?? 0)}`;
@@ -194,7 +197,9 @@ function parseSource(spec: string): OutputSource | null {
   const p = spec.split(',');
   const mode = parseNum(p[0]);
   const source = p[1];
-  if (mode == null || !source) return null;
+  // Ignore non-driving / sentinel modes even if a hand-edited link supplies
+  // them (e.g. b=-1,... for the audio mic) — never re-apply those as outputs.
+  if (mode == null || mode < 1 || !source) return null;
 
   if (source === 'constant') {
     const value = parseNum(p[2]);

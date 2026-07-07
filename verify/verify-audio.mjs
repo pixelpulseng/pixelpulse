@@ -119,6 +119,46 @@ async function main() {
       await page.evaluate(() => !document.body.classList.contains('capturing')));
 
     await page.screenshot({ path: join(OUT_DIR, 'audio-backend.png') });
+
+    // --- Share-state on the audio backend ---
+    // A hand-built link: 48 kHz sr (device pins this — must be a no-op),
+    // trigger, a tight window, channel A driving a sine, and b=-1 (the mic's
+    // "measurement only" sentinel, which must NOT be staged as an output).
+    const shareLink = `${BASE_URL}/pixelpulse.html#audio`
+      + `&trig=0,0&x=-0.01,0.01&sr=0.0000208333&a=1,sine,0,1,192&b=-1,constant,0`;
+    const page4 = await browser.newPage();
+    page4.on('pageerror', (e) => console.log(`  ⚠ page error: ${e.message}`));
+    await page4.goto(shareLink, { waitUntil: 'domcontentloaded' });
+    await waitFor(page4,
+      () => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Enable audio device')),
+      'enable-audio button (shared link)');
+    await page4.evaluate(() => {
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.includes('Enable audio device'))?.click();
+    });
+    await waitFor(page4,
+      () => document.querySelectorAll('#streams section.channel').length === 2,
+      'shared audio device view');
+    await new Promise((r) => setTimeout(r, 500));
+
+    check('share (audio): restores triggering + stays paused',
+      await page4.evaluate(() =>
+        document.body.classList.contains('triggering')
+        && !document.body.classList.contains('capturing')));
+
+    check('share (audio): channel A sine staged, mic (b=-1) not staged',
+      await page4.evaluate(() => document.body.classList.contains('outputs-pending')));
+
+    // Start applies the staged sine to Out (a), leaves In (b) a pure measure.
+    await page4.click('#startpause');
+    await new Promise((r) => setTimeout(r, 600));
+    check('share (audio): Start applies output, clears pending',
+      await page4.evaluate(() =>
+        document.body.classList.contains('capturing')
+        && !document.body.classList.contains('outputs-pending')));
+
+    await page4.screenshot({ path: join(OUT_DIR, 'audio-shared-link.png') });
+    await page4.close();
   } finally {
     await browser.close();
   }
