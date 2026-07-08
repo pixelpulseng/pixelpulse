@@ -122,7 +122,8 @@ async function main() {
 
     // --- Share-state on the audio backend ---
     // A hand-built link: 48 kHz sr (device pins this — must be a no-op),
-    // trigger, a tight window, channel A driving a sine, and b=-1 (the mic's
+    // trigger, a tight window, channel A driving a 192 Hz sine (the 5th field
+    // is frequency in Hz, device-independent), and b=-1 (the mic's
     // "measurement only" sentinel, which must NOT be staged as an output).
     const shareLink = `${BASE_URL}/pixelpulse.html#audio`
       + `&trig=0,0&x=-0.01,0.01&sr=0.0000208333&a=1,sine,0,1,192&b=-1,constant,0`;
@@ -156,6 +157,15 @@ async function main() {
       await page4.evaluate(() =>
         document.body.classList.contains('capturing')
         && !document.body.classList.contains('outputs-pending')));
+
+    // Frequency round-trips as Hz: after the 192 Hz sine is applied (converted
+    // to the device's period-in-samples and back), re-sharing must re-emit
+    // 192, not a sample-count. Proves the device-independent freq encoding.
+    await page4.evaluate(() => document.getElementById('share-btn').click());
+    await new Promise((r) => setTimeout(r, 300));
+    const reHash = await page4.evaluate(() => location.hash);
+    check('share (audio): 192 Hz sine round-trips as frequency, not samples',
+      /(^#|&)a=1,sine,[^,]*,[^,]*,192(&|$)/.test(reHash), reHash);
 
     await page4.screenshot({ path: join(OUT_DIR, 'audio-shared-link.png') });
     await page4.close();

@@ -21,6 +21,7 @@ import { TypedEvent } from './dataserver.js';
 import { readVBUS } from './m1k-power.js';
 import {
   bindShareState, scheduleCapture, parseRestorePlan, hasShareState, shareUrl,
+  periodForFreq,
 } from './share-state.js';
 
 // --- Colors ---
@@ -60,7 +61,24 @@ let currentLayout = 0; // # of side-graph panes shown (0/1/2)
 
 // Channel outputs from a shared link are held here and applied Hi-Z-safe on
 // the first Start, so opening a link never drives current during preview.
+// "Pending" is three coupled pieces of UI state (the map, the body class, and
+// the Start-button hint); setPendingOutputs is the single place that mutates
+// all three, so they can never desync — and clearing on device reset/removal
+// (destroyView) can't leak stale outputs onto the next device.
 let pendingOutputs: Map<string, OutputSource> | null = null;
+let defaultStartTitle = 'Start';
+
+function setPendingOutputs(outputs: Map<string, OutputSource> | null): void {
+  pendingOutputs = outputs && outputs.size > 0 ? outputs : null;
+  const active = pendingOutputs !== null;
+  document.body.classList.toggle('outputs-pending', active);
+  const startBtn = document.getElementById('startpause');
+  if (startBtn) {
+    startBtn.title = active
+      ? 'Start — applies the shared output settings (drives current)'
+      : defaultStartTitle;
+  }
+}
 
 // --- Shareable-state API (consumed by share-state.ts) ---
 
@@ -226,19 +244,19 @@ function restoreShareState(dev: CEEDevice): void {
   }
 
   // Restore the visible window last, after triggering (which resets the axis
-  // limits). goToWindow clamps to the current scroll bounds, so a tight
-  // triggered zoom (e.g. ±10 ms) is honored within the trigger's ±1 s limits.
+  // scroll limits to ±1 s). Axis.window sets visibleMin/Max verbatim — it does
+  // NOT clamp — so clamp here against the current bounds, or a wide shared
+  // window (e.g. -3..0 with a trigger) would show a region outside the valid
+  // buffer. A tighter triggered zoom (e.g. ±10 ms) still fits and is honored.
   if (plan.xWindow) {
-    timeseries.goToWindow(plan.xWindow.min, plan.xWindow.max, false);
+    const ax = timeseries.xaxis;
+    const lo = Math.max(plan.xWindow.min, ax.min);
+    const hi = Math.min(plan.xWindow.max, ax.max);
+    if (lo < hi) timeseries.goToWindow(lo, hi, false);
   }
 
   // Hold outputs until the user presses Start (see applyPendingOutputs).
-  if (plan.channelOutputs.size > 0) {
-    pendingOutputs = plan.channelOutputs;
-    document.body.classList.add('outputs-pending');
-    const startBtn = document.getElementById('startpause');
-    if (startBtn) startBtn.title = 'Start — applies the shared output settings (drives current)';
-  }
+  if (plan.channelOutputs.size > 0) setPendingOutputs(plan.channelOutputs);
 
   // Snapshot the applied state back into the hash (normalizes / drops
   // defaults) so the URL is canonical from the first load.
@@ -247,17 +265,27 @@ function restoreShareState(dev: CEEDevice): void {
 
 // Apply any deferred shared-link outputs to the device. Called once, when the
 // user first starts capture — this is the moment current is allowed to flow.
-function applyPendingOutputs(): void {
-  if (!pendingOutputs) return;
+// Returns true if it applied (or there was nothing pending); returns false and
+// leaves the pending state intact if the device is gone, so a failed Start can
+// be retried without losing the staged outputs.
+function applyPendingOutputs(): boolean {
+  if (!pendingOutputs) return true;
   const dev = server.device as CEEDevice | null;
-  if (dev) {
-    for (const ch of Object.values(dev.channels) as Channel[]) {
-      const src = pendingOutputs.get(ch.id);
-      if (src) ch.setDirect({ ...src });
+  if (!dev) return false;
+  for (const ch of Object.values(dev.channels) as Channel[]) {
+    const src = pendingOutputs.get(ch.id);
+    if (!src) continue;
+    const out = { ...src };
+    // Shared periodic sources carry frequency (Hz); convert to the device's
+    // period-in-samples against its live sampleTime, then drop the marker.
+    if (typeof out.freqHz === 'number') {
+      out.period = periodForFreq(out.freqHz, dev.sampleTime);
+      delete out.freqHz;
     }
+    ch.setDirect(out);
   }
-  pendingOutputs = null;
-  document.body.classList.remove('outputs-pending');
+  setPendingOutputs(null);
+  return true;
 }
 
 // The time-axis labels are drawn by exactly one graph (showXbottom).
@@ -473,6 +501,9 @@ export function destroyView(): void {
   meterListener?.cancel();
   timeseries?.cancel();
   for (const cv of channelviews) cv.destroy();
+  // Drop any staged shared-link outputs so they can't leak onto the next
+  // device (a swap/removal must not carry another device's drive settings).
+  setPendingOutputs(null);
   setLayout(0);
 }
 
@@ -1116,6 +1147,10 @@ function snapshotTargets(): SnapshotTarget[] {
 // --- Document ready setup ---
 
 export function setupToolbar(): void {
+  // Remember the Start button's resting tooltip so the pending-outputs hint
+  // can be reverted cleanly.
+  defaultStartTitle = document.getElementById('startpause')?.getAttribute('title') ?? 'Start';
+
   // Backend chooser: the backend binds at module load, so switching is
   // "rewrite the hash, reload". Unrelated hash flags (perfstat, ...) are
   // preserved; backend tokens (connect/sim/audio and sim params) replaced.
@@ -1334,8 +1369,9 @@ export function setupToolbar(): void {
     if (dev.captureState) {
       dev.pauseCapture();
     } else {
-      applyPendingOutputs();
-      dev.startCapture();
+      // Only begin capture once the deferred outputs are actually applied, so
+      // a failure leaves the staged outputs intact for a retry.
+      if (applyPendingOutputs()) dev.startCapture();
     }
   };
   document.getElementById('startpause')?.addEventListener('click', toggleCapture);
@@ -1354,7 +1390,9 @@ export function setupToolbar(): void {
 
   captureState.subscribe((s) => {
     const btn = document.getElementById('startpause');
-    if (btn) btn.title = s ? 'Pause' : 'Start';
+    // While paused with staged outputs, setPendingOutputs owns the title
+    // (the "drives current" hint); don't clobber it here.
+    if (btn && !(!s && pendingOutputs)) btn.title = s ? 'Pause' : defaultStartTitle;
     document.body.classList.toggle('capturing', !!s);
   });
 }

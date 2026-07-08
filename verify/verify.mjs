@@ -301,6 +301,20 @@ async function main() {
     check('share restore: channel output staged but held Hi-Z (not driving)',
       await page3.evaluate(() => document.body.classList.contains('outputs-pending')));
 
+    // The link's wide window (x=-3,0) combined with a trigger must be clamped
+    // to the trigger's ±1 s axis limits — not left showing a region outside
+    // the buffer. Re-Share and read back the (clamped) x window from the hash.
+    await page3.evaluate(() => document.getElementById('share-btn').click());
+    await new Promise((r) => setTimeout(r, 300));
+    const clampedHash = await page3.evaluate(() => location.hash);
+    check('share restore: wide window under trigger is clamped to ±1 s',
+      await page3.evaluate(() => {
+        const m = /(?:^#|&)x=(-?[\d.]+),(-?[\d.]+)(?:&|$)/.exec(location.hash);
+        if (!m) return true; // window at default (no x token) is also fine
+        const min = parseFloat(m[1]), max = parseFloat(m[2]);
+        return min >= -1.0001 && max <= 1.0001;
+      }), clampedHash);
+
     // Pressing Start applies the held output and begins capture.
     await page3.click('#startpause');
     await new Promise((r) => setTimeout(r, 600));

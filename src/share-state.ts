@@ -27,7 +27,9 @@
  *   sr=sampleTime       sample time (s/sample)
  *   <chId>=mode,src,... per-channel output source (chId = 'a'/'b'):
  *                         constant: mode,constant,value
- *                         periodic: mode,src,offset,amplitude,period
+ *                         periodic: mode,src,offset,amplitude,freqHz
+ *                       (frequency in Hz — device-independent, unlike the
+ *                       device's sample-relative period)
  *   Numbers are compacted (trailing-zero-trimmed) to keep links short.
  */
 
@@ -81,7 +83,7 @@ function tokenMap(): Map<string, string> {
 
 // --- serialization ---
 
-function serializeSource(src: OutputSource): string | null {
+function serializeSource(src: OutputSource, sampleTime: number): string | null {
   const mode = typeof src.mode === 'string'
     ? (src.mode === 'SVMI' ? 1 : src.mode === 'SIMV' ? 2 : 0)
     : src.mode;
@@ -94,9 +96,15 @@ function serializeSource(src: OutputSource): string | null {
     return `${mode},constant,${num(src.value ?? 0)}`;
   }
   if (src.source === 'sine' || src.source === 'triangle' || src.source === 'square') {
+    // OutputSource.period is in samples (device-clock-relative). Serialize
+    // frequency in Hz instead so the link is device-independent: freq =
+    // 1/(period·sampleTime). It's reconstructed against the *restoring*
+    // device's sampleTime on apply.
+    const period = src.period ?? 0;
+    const freq = period > 0 ? 1 / (period * sampleTime) : 0;
     return [
       mode, src.source,
-      num(src.offset ?? 0), num(src.amplitude ?? 0), num(src.period ?? 0),
+      num(src.offset ?? 0), num(src.amplitude ?? 0), num(freq),
     ].join(',');
   }
   // adv_square / arb: skip (rare; the device keeps its own state). A future
@@ -151,7 +159,7 @@ export function captureNow(): void {
 
   // Per-channel output sources
   for (const ch of Object.values(dev.channels) as Channel[]) {
-    const s = serializeSource(ch.source);
+    const s = serializeSource(ch.source, dev.sampleTime);
     if (s) tokens.push(`${ch.id}=${s}`);
   }
 
@@ -185,12 +193,12 @@ export interface RestorePlan {
 }
 
 // True when a shared config is present — the caller uses this to decide
-// whether outputs must be deferred (held Hi-Z) until first Start.
+// whether outputs must be deferred (held Hi-Z) until first Start. Derived from
+// the single OWNED_KEY list so it can never fall out of sync with what
+// captureNow writes / parseRestorePlan reads (previously a hand-kept regex
+// here silently omitted sg1/sg2).
 export function hasShareState(): boolean {
-  for (const k of tokenMap().keys()) {
-    if (/^(layout|ov|ph|trig|x|sr|a|b)$/.test(k) || /^ov\d+$/.test(k)) return true;
-  }
-  return false;
+  return readTokens().some(t => OWNED_KEY.test(t));
 }
 
 function parseSource(spec: string): OutputSource | null {
@@ -209,11 +217,20 @@ function parseSource(spec: string): OutputSource | null {
   if (source === 'sine' || source === 'triangle' || source === 'square') {
     const offset = parseNum(p[2]);
     const amplitude = parseNum(p[3]);
-    const period = parseNum(p[4]);
-    if (offset == null || amplitude == null || period == null) return null;
-    return { mode, source, offset, amplitude, period };
+    const freqHz = parseNum(p[4]);
+    if (offset == null || amplitude == null || freqHz == null || freqHz <= 0) return null;
+    // Carry frequency (Hz); the caller converts to period (samples) against
+    // the restoring device's sampleTime — see periodForFreq / applyPendingOutputs.
+    return { mode, source, offset, amplitude, freqHz };
   }
   return null;
+}
+
+// Convert a shared frequency (Hz) to the device's period-in-samples for the
+// given sampleTime. Exported for the apply path (views.ts applyPendingOutputs),
+// which knows the live device clock.
+export function periodForFreq(freqHz: number, sampleTime: number): number {
+  return 1 / (freqHz * sampleTime);
 }
 
 export function parseRestorePlan(): RestorePlan {

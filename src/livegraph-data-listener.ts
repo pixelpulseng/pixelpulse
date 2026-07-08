@@ -122,12 +122,18 @@ export class TimeseriesGraphListener extends DataListener {
 
   private checkWindowChange = (min: number, max: number, _done?: boolean, target?: [number, number]): void => {
     const lg = this.graphs[0];
-    this.onWindowChanged?.();
 
     if (target) {
+      // A pending zoom target that's still shrinking toward its goal — ignore
+      // this intermediate frame entirely (don't notify observers of a window
+      // that was never committed).
       if ((target[1] - target[0]) < 0.5 * (max - min)) return;
       [min, max] = target;
     }
+
+    // The window is settling on (min,max); observers (share-state URL sync)
+    // see only committed windows, not discarded mid-animation frames.
+    this.onWindowChanged?.();
 
     const span = max - min;
 
