@@ -136,7 +136,6 @@ class App {
     if (startPauseBtn) startPauseBtn.setAttribute('title', 'Stop');
 
     if (this.device.sampleTime !== this.targetSampleTime) {
-      console.log('Setting sample rate');
       this.device.configure({ sampleTime: this.targetSampleTime });
       this.pendingStart = true;
       return;

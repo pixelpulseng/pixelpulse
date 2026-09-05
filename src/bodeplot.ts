@@ -329,7 +329,6 @@ class App {
 
     const targetSampleTime = 1 / 80e3;
     if (this.device.sampleTime !== targetSampleTime) {
-      console.log('Setting sample rate');
       this.device.configure({ sampleTime: targetSampleTime });
       // Wait for the server to reconfigure the device, then start it
       this.pendingStart = true;

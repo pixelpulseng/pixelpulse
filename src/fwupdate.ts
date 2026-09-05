@@ -91,7 +91,7 @@ class FirmwareUpdateApp {
           const json = JSON.parse(reader.result as string) as FirmwareImage;
           this.firmwareLoaded(json);
         } catch (error) {
-          console.log(error);
+          console.error(error);
           alert('Invalid JSON');
         }
       };
@@ -120,7 +120,6 @@ class FirmwareUpdateApp {
 
   private firmwareLoaded = (firmware: FirmwareImage): void => {
     this.firmware = firmware;
-    console.log('firmwareLoaded', this.firmware);
 
     let version = this.firmware.fwVersion;
     if (this.firmware.gitVersion) {
@@ -151,7 +150,6 @@ class FirmwareUpdateApp {
   }
 
   private updateDevices = (): void => {
-    console.log('updating device list');
     const potentialDevices = server.devices.filter((dev) =>
       this.isApplicable(dev),
     );
@@ -243,7 +241,6 @@ class FirmwareUpdateApp {
     const waitForDevice = (targetSerial: string): Promise<Device> => {
       return new Promise((resolve) => {
         const listCb = (): void => {
-          console.log('listCb', server.devices);
           for (const dev of server.devices) {
             if (dev.serial === targetSerial) {
               server.devicesChanged.unListen(listCb);
@@ -346,7 +343,6 @@ function parseUrlParams(): UrlParams {
 }
 
 const params = parseUrlParams();
-console.log(params);
 
 document.addEventListener('DOMContentLoaded', () => {
   new FirmwareUpdateApp(params);

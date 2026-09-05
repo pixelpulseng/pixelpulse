@@ -64,10 +64,8 @@ pageFuncs[2] = () => {
 };
 
 function tryConnect(): void {
-  console.log('Trying connect');
   const ws = new WebSocket('ws://localhost:9003/ws/v0');
   ws.onopen = () => {
-    console.log('Connected');
     const install = document.getElementById('install');
     if (install) install.style.display = 'none';
     const success = document.getElementById('install-success');

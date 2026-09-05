@@ -327,7 +327,6 @@ function onCEE(dev: CEEDevice): void {
   }
 
   function saveData(): void {
-    console.log(data);
     fetch('http://localhost:1337/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
