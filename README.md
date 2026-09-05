@@ -5,16 +5,34 @@ source-measure units: live streaming plots with analog-style phosphor density
 rendering, waveform sourcing, triggering, measurements, and device calibration —
 all in the browser.
 
-Pixelpulse is a static web app with two interchangeable device backends:
+**Try it live** (nothing to install):
+
+- [**Run Pixelpulse**](https://pixelpulseng.github.io/pixelpulse/pixelpulse.html)
+  — with an M1K on USB, in a Chromium-based browser
+- [**Simulator**](https://pixelpulseng.github.io/pixelpulse/pixelpulse.html#sim)
+  — a simulated M1K; no hardware needed
+- [**Audio**](https://pixelpulseng.github.io/pixelpulse/pixelpulse.html#audio)
+  — your speaker and microphone as the instrument
+
+Pixelpulse is a static web app with interchangeable device backends:
 
 - **WebUSB** (default in Chromium-based browsers): in-browser device
   drivers — plug in the device, click "Connect USB device…", done. No
-  install, no daemon.
+  install, no daemon. M1K units need firmware with WebUSB descriptors,
+  which can be flashed in-browser via `fwupdate.html`.
 - **WebSocket**: the [nonolith-connect](https://github.com/nonolith/connect)
   daemon (with M1K support) on `localhost:9003` — for multi-client sharing,
-  remote (LAN) operation, and non-WebUSB browsers. Force it with `#connect`
-  (or `?server=host:port`); browsers permit `ws://localhost` connections
-  even from `https://` origins, so this works from GitHub Pages too.
+  remote (LAN) operation, and non-WebUSB browsers (Firefox, Safari). Force it
+  with `#connect` (or `?server=host:port`); browsers permit `ws://localhost`
+  connections even from `https://` origins, so this works from GitHub Pages
+  too.
+- **Simulator** (`#sim`): a software M1K paced by the wall clock — channel A
+  drives a modeled LED (the classic exponential I-V knee), channel B a
+  100 Ω load to the 2.5 V rail — so the full stack (streaming, triggering,
+  phosphor rendering, exports) runs with no device attached.
+- **Audio** (`#audio`): the computer's speaker as signal source and
+  microphone as measurement channel — an AC-coupled, uncalibrated soundcard
+  scope and signal generator.
 
 ## Features
 
@@ -44,8 +62,12 @@ Pixelpulse is a static web app with two interchangeable device backends:
 
 ## Quick start
 
-In a Chromium-based browser, open the hosted app, plug in the device, and
-click **Connect USB device…** — that's it.
+In a Chromium-based browser, open the
+[hosted app](https://pixelpulseng.github.io/pixelpulse/pixelpulse.html),
+plug in the device, and click **Connect USB device…** — that's it. No
+device? Open the
+[simulator](https://pixelpulseng.github.io/pixelpulse/pixelpulse.html#sim)
+instead.
 
 For development, or to use the WebSocket backend:
 
@@ -66,6 +88,7 @@ nonolith-connect daemon instead of WebUSB).
 | `m1k_advanced.html` | M1K hardware monitoring & frontend control |
 | `bodeplot.html` | Bode plot (frequency response) |
 | `curvetrace.html` | I-V curve tracer |
+| `battery.html` | LiPo capacity test |
 | `calibrate.html` | Legacy CEE calibration |
 | `fwupdate.html` | Device firmware update |
 | `debuginfo.html` | Protocol/debug info |
