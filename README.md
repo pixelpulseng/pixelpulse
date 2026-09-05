@@ -126,5 +126,9 @@ streaming, phosphor density rendering, and guided M1K calibration.
 
 GPL-3.0-or-later — see [LICENSE](LICENSE).
 
+`public/lib/dsp.js` is vendored from
+[corbanbrook/dsp.js](https://github.com/corbanbrook/dsp.js) (MIT,
+GPL-compatible); its license text is included in the file header.
+
 (C) 2011 Nonolith Labs, LLC ·
 (C) 2026 [@i-infra](https://github.com/i-infra) and contributors.
