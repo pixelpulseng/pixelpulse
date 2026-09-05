@@ -21,7 +21,7 @@
   "bugs": {
     "url": "https://github.com/i-infra/pixelpulse/issues"
   },
-  "homepage": "https://github.com/nonolith/pixelpulse#readme",
+  "homepage": "https://github.com/pixelpulseng/pixelpulse#readme",
   "devDependencies": {
     "less": "^4.6.4",
     "puppeteer-core": "^25.3.0",
